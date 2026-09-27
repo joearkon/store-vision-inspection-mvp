@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { Icon } from "./icons";
-import { formatDuration, percent, statusLabel } from "./utils";
+import { formatDuration, percent, statusLabel, timelinePercent } from "./utils";
 
 const navItems = [
   ["dashboard", "监控大盘", "dashboard"],
@@ -121,7 +121,7 @@ function Dashboard({ navigate }) {
     setError("");
     api.dashboard().then(setData).catch((err) => setError(err.message));
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   if (error) return <ErrorCard message={error} retry={load} />;
   if (!data) return <LoadingCard text="正在读取监控大盘…" />;
   const { metrics, recent_events: events } = data;
@@ -187,6 +187,16 @@ function UploadPage({ bootstrap, navigate }) {
   const [run, setRun] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [profiles, setProfiles] = useState([]);
+  const [analysisMode, setAnalysisMode] = useState("frame_baseline");
+  const [ruleCode, setRuleCode] = useState("E1");
+
+  useEffect(() => {
+    api.rulesConfig().then((config) => {
+      setProfiles(config.profiles);
+      setAnalysisMode(config.default_analysis_mode);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!run || ["completed", "failed"].includes(run.status)) return;
@@ -199,14 +209,21 @@ function UploadPage({ bootstrap, navigate }) {
     setBusy(true); setError(""); setUploadProgress(0);
     try {
       const video = await api.uploadVideo({ file, cameraId, onProgress: setUploadProgress });
-      const created = await api.createRun(video.id, notifications);
+      const created = await api.createRun(video.id, notifications, analysisMode, ruleCode);
       setRun(created);
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
   };
 
-  const stages = ["queued", "probing", "extracting", "analyzing", "aggregating", "completed"];
-  const currentIndex = run ? stages.indexOf(run.stage) : -1;
+  const stages = run?.analysis_mode === "two_stage"
+    ? ["queued", "probing", "extracting", "screening", "refining", "aggregating", "completed"]
+    : ["queued", "probing", "extracting", "analyzing", "aggregating", "completed"];
+  const stepLabels = run?.analysis_mode === "two_stage"
+    ? ["任务排队", "读取视频", "FFmpeg 抽帧", "视频低帧率粗筛", "关键时间点复核", "后端规则聚合", "分析完成"]
+    : ["任务排队", "读取视频", "FFmpeg 抽帧", "豆包逐帧分析", "多帧事件聚合", "分析完成"];
+  const currentIndex = run?.stage === "fallback_analyzing"
+    ? 4
+    : run ? stages.indexOf(run.stage) : -1;
   return <div className="upload-layout">
     <section className="surface upload-card">
       <div className="page-section-title"><div><h2>上传巡检视频</h2><p>视频会通过 FFmpeg 抽帧，并由豆包 Vision 进行真实分析</p></div><span className="prototype-chip">真实管线</span></div>
@@ -219,15 +236,22 @@ function UploadPage({ bootstrap, navigate }) {
       <div className="form-block"><label>关联视频区域</label><div className="camera-options">
         {(bootstrap?.cameras || []).map((camera) => <button className={cameraId === camera.id ? "selected" : ""} onClick={() => setCameraId(camera.id)} key={camera.id}><Icon name="camera" /><div><strong>{camera.name}</strong><span>{camera.area_type}</span></div><i /></button>)}
       </div></div>
-      <label className="switch-row"><div><strong>分析完成后发送飞书告警</strong><span>演示视频默认关闭，避免循环告警</span></div><input type="checkbox" checked={notifications} onChange={(e) => setNotifications(e.target.checked)} /><i /></label>
+      <div className="form-block"><label>本次检测规则</label><div className="mode-options rule-options">
+        <button type="button" className={ruleCode === "E1" ? "selected" : ""} onClick={() => setRuleCode("E1")}><div><strong>E1 冰箱门持续开启</strong><span>正式规则 · 持续 30 秒确认</span></div><i /></button>
+        <button type="button" className={ruleCode === "A1" ? "selected" : ""} onClick={() => { setRuleCode("A1"); setNotifications(false); }}><div><strong>A1 口罩/手套合规</strong><span>实验规则 · 最近 5 个有效帧命中 3 帧</span></div><i /></button>
+      </div></div>
+      <div className="form-block"><label>本次分析模式</label><div className="mode-options">
+        {profiles.map((profile) => <button type="button" className={analysisMode === profile.id ? "selected" : ""} onClick={() => setAnalysisMode(profile.id)} key={profile.id}><div><strong>{profile.name}</strong><span>{profile.id === "frame_baseline" ? "全量 1 fps · 准确性基线" : "低帧率粗筛 · 关键点复核 · 自动回退"}</span></div><i /></button>)}
+      </div></div>
+      <label className={`switch-row ${ruleCode === "A1" ? "disabled" : ""}`}><div><strong>分析完成后发送飞书告警</strong><span>{ruleCode === "A1" ? "实验规则只进入 Dashboard，不发送真实告警" : "演示视频默认关闭，避免循环告警"}</span></div><input type="checkbox" disabled={ruleCode === "A1"} checked={notifications} onChange={(e) => setNotifications(e.target.checked)} /><i /></label>
       {error && <div className="inline-error"><Icon name="alert" />{error}</div>}
       {!run && <button className="button primary large" disabled={busy || !file} onClick={start}>{busy ? `正在上传 ${Math.round(uploadProgress * 100)}%` : <><Icon name="play" />开始 AI 分析</>}</button>}
     </section>
     <aside className="surface analysis-card">
-      <div className="page-section-title"><div><h2>分析进度</h2><p>{run ? run.id : "提交后显示真实任务状态"}</p></div>{run && <StatusBadge value={run.status} />}</div>
+      <div className="page-section-title"><div><h2>分析进度</h2><p>{run ? `${run.id} · ${run.rule_code || "E1"} · ${run.analysis_mode === "two_stage" ? "双层判定" : "逐帧基线"}` : "提交后显示真实任务状态"}</p></div>{run && <StatusBadge value={run.status} />}</div>
       <div className="analysis-progress"><div className="progress-ring" style={{ "--progress": `${Math.round((run?.progress || 0) * 360)}deg` }}><strong>{Math.round((run?.progress || 0) * 100)}%</strong></div><div><strong>{run ? statusLabel(run.status) : "等待任务"}</strong><span>{run?.error_message || "上传视频后，Worker 将开始处理"}</span></div></div>
       <div className="steps">
-        {["任务排队", "读取视频", "FFmpeg 抽帧", "豆包视觉分析", "多帧事件聚合", "分析完成"].map((label, index) => <div className={index < currentIndex ? "done" : index === currentIndex ? "active" : ""} key={label}><i>{index < currentIndex ? <Icon name="check" size={13} /> : index + 1}</i><span>{label}</span></div>)}
+        {stepLabels.map((label, index) => <div className={index < currentIndex ? "done" : index === currentIndex ? "active" : ""} key={label}><i>{index < currentIndex ? <Icon name="check" size={13} /> : index + 1}</i><span>{label}</span></div>)}
       </div>
       {run?.status === "completed" && <button className="button primary" onClick={() => navigate("dashboard")}>查看分析结果</button>}
       {run?.status === "failed" && <button className="button secondary" onClick={() => setRun(null)}>重新提交</button>}
@@ -245,8 +269,8 @@ function RunsPage({ navigate }) {
   if (error) return <ErrorCard message={error} retry={load} />;
   if (!runs) return <LoadingCard />;
   return <section className="surface list-page"><div className="page-section-title"><div><h2>视频分析任务</h2><p>任务状态持久化，服务重启后可继续追踪</p></div><button className="button primary" onClick={() => navigate("upload")}><Icon name="upload" />上传视频</button></div>
-    <div className="table-head run-grid"><span>任务 / 视频</span><span>关联摄像头</span><span>处理进度</span><span>状态</span><span>创建时间</span></div>
-    {runs.length === 0 ? <div className="table-empty">暂无分析任务</div> : runs.map((run) => <div className="table-row run-grid" key={run.id}><div><strong>{run.id}</strong><span>{run.original_name}</span></div><span>{run.camera_id}</span><div className="mini-progress"><i style={{ width: `${run.progress * 100}%` }} /><span>{Math.round(run.progress * 100)}%</span></div><StatusBadge value={run.status} /><time>{new Date(run.created_at).toLocaleString("zh-CN", { hour12: false })}</time></div>)}
+    <div className="table-head run-grid"><span>任务 / 视频</span><span>规则 / 模式</span><span>处理进度</span><span>调用/Token</span><span>状态</span><span>创建时间</span></div>
+    {runs.length === 0 ? <div className="table-empty">暂无分析任务</div> : runs.map((run) => <div className="table-row run-grid" key={run.id}><div><strong>{run.id}</strong><span>{run.original_name}</span></div><span>{run.rule_code || "E1"} · {run.analysis_mode === "two_stage" ? "双层判定" : "逐帧基线"}</span><div className="mini-progress"><i style={{ width: `${run.progress * 100}%` }} /><span>{Math.round(run.progress * 100)}%</span></div><span>{run.request_count || 0} 次 / {((run.prompt_tokens || 0) + (run.completion_tokens || 0)).toLocaleString()}</span><StatusBadge value={run.status} /><time>{new Date(run.created_at).toLocaleString("zh-CN", { hour12: false })}</time></div>)}
   </section>;
 }
 
@@ -254,19 +278,58 @@ function EventDetail({ id, navigate }) {
   const [event, setEvent] = useState(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState(null);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoTime, setVideoTime] = useState(0);
+  const [videoFailed, setVideoFailed] = useState(false);
+  const videoRef = useRef(null);
   const load = () => api.event(id).then(setEvent).catch((err) => setError(err.message));
-  useEffect(load, [id]);
+  useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+    if (!event?.evidence?.length) return;
+    const confirmed = event.evidence.find((item) => item.evidence_type === "confirmed");
+    setSelectedEvidenceId((current) => current || confirmed?.id || event.evidence[0].id);
+  }, [event]);
   if (error) return <ErrorCard message={error} retry={load} />;
   if (!event) return <LoadingCard text="正在加载事件证据…" />;
   const act = async (action) => { setSaving(true); try { setEvent(await api.eventAction(id, action)); } catch (err) { setError(err.message); } finally { setSaving(false); } };
   const evidenceByType = Object.fromEntries(event.evidence.map((item) => [item.evidence_type, item]));
-  const selected = evidenceByType.confirmed || event.evidence[0];
+  const selected = event.evidence.find((item) => item.id === selectedEvidenceId) || evidenceByType.confirmed || event.evidence[0];
+  const effectiveDuration = videoDuration || event.video_duration_seconds || Math.max(event.last_seen_offset + 1, 1);
+  const anomalyEnd = event.recovered_offset ?? event.last_seen_offset;
+  const evidenceLabels = {start:"首次发现", confirmed:"确认异常", peak:"最高置信度", recovered:"恢复正常"};
+  const seekToEvidence = (item) => {
+    setSelectedEvidenceId(item.id);
+    setVideoTime(item.captured_offset);
+    if (videoRef.current && !videoFailed) {
+      videoRef.current.currentTime = item.captured_offset;
+      videoRef.current.pause();
+    }
+  };
   return <div className="detail-page">
     <button className="back-button" onClick={() => navigate("dashboard")}><Icon name="arrow" />返回监控大盘</button>
     <section className="surface detail-header"><div><div className="badge-line"><SeverityBadge value={event.severity} /><StatusBadge value={event.status} /></div><h2>{event.title}</h2><p>{event.store_name} · {event.camera_name} · {event.id}</p></div><div className="detail-actions">{event.status === "pending_confirmation" && <><button className="button secondary" disabled={saving} onClick={() => act("mark_false_positive")}>标记误报</button><button className="button primary" disabled={saving} onClick={() => act("acknowledge")}><Icon name="check" />确认事件</button></>}{event.status === "acknowledged" && <button className="button primary" onClick={() => act("start_rectification")}>开始整改</button>}{event.status === "rectifying" && <button className="button primary" onClick={() => act("resolve")}>确认已解决</button>}</div></section>
     <div className="detail-columns">
-      <section className="surface evidence-card"><div className="section-header"><h2>事件证据</h2><span>{selected ? `视频第 ${formatDuration(selected.captured_offset)}` : "暂无证据"}</span></div>{selected ? <div className="evidence-image"><img src={`/api/media/evidence/${selected.id}`} alt="事件确认帧" /><div><span>AI 确认帧</span><time>{formatDuration(selected.captured_offset)}</time></div></div> : <div className="table-empty">暂无证据图</div>}<div className="evidence-strip">{event.evidence.map((item) => <div key={item.id}><img src={`/api/media/evidence/${item.id}`} alt={item.evidence_type} /><span>{({start:"首次发现",confirmed:"确认异常",peak:"最高置信度",recovered:"恢复正常"})[item.evidence_type] || item.evidence_type}</span></div>)}</div></section>
-      <aside className="surface event-summary"><div className="section-header"><h2>AI 研判结果</h2><Confidence value={event.max_confidence} /></div><dl><div><dt>规则编码</dt><dd>E1 冰箱门持续开启</dd></div><div><dt>首次发现</dt><dd>{formatDuration(event.first_seen_offset)}</dd></div><div><dt>确认异常</dt><dd>{formatDuration(event.confirmed_offset)}</dd></div><div><dt>持续时间</dt><dd>{formatDuration(event.confirmed_offset - event.first_seen_offset)}</dd></div><div><dt>恢复时间</dt><dd>{event.recovered_offset == null ? "尚未观察到恢复" : formatDuration(event.recovered_offset)}</dd></div></dl><div className="rule-note"><strong>判定策略</strong><p>冷藏设备门连续处于开启状态达到30秒，由后端时序规则确认；严重度与SLA不由模型自由生成。</p></div></aside>
+      <section className="surface evidence-card">
+        <div className="section-header"><div><h2>事件证据</h2><p className="section-subtitle">点击证据或时间轴标记，跳转到原视频对应时刻</p></div><span>{`当前 ${formatDuration(videoTime)}`}</span></div>
+        {selected ? <>
+          <div className="evidence-video">
+            {!videoFailed ? <video ref={videoRef} src={api.eventVideoUrl(event.id)} poster={api.evidenceUrl(selected.id)} controls preload="metadata" onLoadedMetadata={(media) => setVideoDuration(media.currentTarget.duration)} onTimeUpdate={(media) => setVideoTime(media.currentTarget.currentTime)} onError={() => setVideoFailed(true)} /> : <img src={api.evidenceUrl(selected.id)} alt="事件证据帧" />}
+            <div className="video-evidence-caption"><span>{videoFailed ? "原视频暂不可播放 · 当前显示证据帧" : event.video_original_name}</span><time>{formatDuration(videoTime)}</time></div>
+          </div>
+          <div className="incident-scrubber" aria-label="原视频异常时间轴">
+            <div className="scrubber-summary"><strong>异常关注区间</strong><span>{formatDuration(event.first_seen_offset)} – {formatDuration(anomalyEnd)}</span></div>
+            <div className="scrubber-track">
+              <i className="scrubber-danger" style={{left:`${timelinePercent(event.first_seen_offset, effectiveDuration)}%`, width:`${Math.max(1, timelinePercent(anomalyEnd, effectiveDuration) - timelinePercent(event.first_seen_offset, effectiveDuration))}%`}} />
+              <i className="scrubber-playhead" style={{left:`${timelinePercent(videoTime, effectiveDuration)}%`}} />
+              {event.evidence.map((item) => <button key={item.id} className={`scrubber-marker marker-${item.evidence_type}`} style={{left:`${timelinePercent(item.captured_offset, effectiveDuration)}%`}} title={`${evidenceLabels[item.evidence_type] || item.evidence_type} · ${formatDuration(item.captured_offset)}`} aria-label={`跳转到${evidenceLabels[item.evidence_type] || item.evidence_type} ${formatDuration(item.captured_offset)}`} onClick={() => seekToEvidence(item)} />)}
+            </div>
+            <div className="scrubber-scale"><span>0 秒</span><span>{formatDuration(effectiveDuration)}</span></div>
+          </div>
+        </> : <div className="table-empty">暂无证据图</div>}
+        <div className="evidence-strip">{event.evidence.map((item) => <button type="button" className={selected?.id === item.id ? "active" : ""} key={item.id} onClick={() => seekToEvidence(item)}><img src={api.evidenceUrl(item.id)} alt={item.evidence_type} /><span><strong>{evidenceLabels[item.evidence_type] || item.evidence_type}</strong><time>{formatDuration(item.captured_offset)}</time></span></button>)}</div>
+      </section>
+      <aside className="surface event-summary"><div className="section-header"><h2>AI 研判结果</h2><Confidence value={event.max_confidence} /></div><dl><div><dt>规则编码</dt><dd>{event.rule_code} {event.title}</dd></div><div><dt>分析模式</dt><dd>{event.analysis_mode === "two_stage" ? "双层判定" : "逐帧基线"}</dd></div><div><dt>首次发现</dt><dd>{formatDuration(event.first_seen_offset)}</dd></div><div><dt>确认异常</dt><dd>{formatDuration(event.confirmed_offset)}</dd></div><div><dt>已观察持续</dt><dd>{formatDuration(event.last_seen_offset - event.first_seen_offset)}</dd></div><div><dt>模型消耗</dt><dd>{event.request_count || 0} 次 / {((event.prompt_tokens || 0) + (event.completion_tokens || 0)).toLocaleString()} Token</dd></div><div><dt>恢复时间</dt><dd>{event.recovered_offset == null ? "尚未观察到恢复" : formatDuration(event.recovered_offset)}</dd></div></dl><div className="rule-note"><strong>判定策略</strong><p>{event.rule_code === "A1" ? "仅在操作区人员脸部或双手清晰可见时判断，最近5个有效观察中至少3次违规才确认；该规则为实验规则，默认不发送飞书告警。" : "冷藏设备门连续处于开启状态达到30秒，由后端时序规则确认；严重度与SLA不由模型自由生成。"}</p></div></aside>
     </div>
     <section className="surface timeline-card"><div className="section-header"><h2>事件时间线</h2><span>{event.timeline.length} 条记录</span></div><div className="timeline">{event.timeline.map((item) => <div key={item.id}><i /><time>{new Date(item.created_at).toLocaleString("zh-CN", { hour12: false })}</time><div><strong>{item.note}</strong><span>{item.from_status ? `${statusLabel(item.from_status)} → ${statusLabel(item.to_status)}` : "系统记录"}</span></div></div>)}</div></section>
   </div>;
@@ -284,16 +347,28 @@ function RectificationPage({ navigate }) {
 }
 
 const rules = [
-  ["E1", "冰箱门持续开启", "多帧时序", "持续30秒", "P1", true],
-  ["A2", "未戴工作帽/发网", "ROI + 多帧", "最近5帧命中3帧", "P1", false],
-  ["C1", "未穿围裙/工服", "ROI + 多帧", "最近5帧命中3帧", "P1", false],
-  ["A3", "操作台明显脏乱", "环境 + 多帧", "持续60秒", "P1", false],
-  ["A4", "地面积水/明显垃圾", "环境 + 多帧", "最近5帧命中3帧", "P1/P2", false],
-  ["B1", "明显烟雾/异常明火", "高危快速检测", "首帧预警、后续确认", "P0", false]
+  ["E1", "冰箱门持续开启", "多帧时序", "持续30秒", "P1", "ready"],
+  ["A1", "未佩戴口罩或一次性手套", "ROI + 多帧", "最近5个有效帧命中3帧", "P2", "experimental"],
+  ["A2", "未戴工作帽/发网", "ROI + 多帧", "最近5帧命中3帧", "P1", "planned"],
+  ["C1", "未穿围裙/工服", "ROI + 多帧", "最近5帧命中3帧", "P1", "planned"],
+  ["A3", "操作台明显脏乱", "环境 + 多帧", "持续60秒", "P1", "planned"],
+  ["A4", "地面积水/明显垃圾", "环境 + 多帧", "最近5帧命中3帧", "P1/P2", "planned"],
+  ["B1", "明显烟雾/异常明火", "高危快速检测", "首帧预警、后续确认", "P0", "planned"]
 ];
 
 function RulesPage() {
-  return <section className="surface list-page"><div className="page-section-title"><div><h2>首期正式规则</h2><p>规则严重度、确认策略和通知方式由后端配置，不由模型自由生成</p></div><span className="prototype-chip">6 条正式规则</span></div><div className="table-head rule-grid"><span>规则</span><span>能力类型</span><span>确认策略</span><span>严重度</span><span>实现状态</span></div>{rules.map(([code,name,type,strategy,severity,ready]) => <div className="table-row rule-grid" key={code}><div><strong>{code} · {name}</strong><span>正式验收规则</span></div><span>{type}</span><span>{strategy}</span><SeverityBadge value={severity.split("/")[0]} /><span className={ready ? "ready" : "planned"}>{ready ? "第一阶段" : "后续实现"}</span></div>)}</section>;
+  const [config, setConfig] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  useEffect(() => { api.rulesConfig().then(setConfig); }, []);
+  const selectMode = async (mode) => {
+    setSaving(true); setMessage("");
+    try { setConfig(await api.updateRulesConfig(mode)); setMessage("默认分析模式已保存，新任务将使用该模式"); }
+    catch (error) { setMessage(error.message); }
+    finally { setSaving(false); }
+  };
+  if (!config) return <LoadingCard text="正在读取规则配置…" />;
+  return <div className="rules-layout"><section className="surface mode-config"><div className="page-section-title"><div><h2>分析模式</h2><p>逐帧基线与双层判定均可用于当前已实现规则，上传时可单独覆盖</p></div><span className="prototype-chip">默认：{config.default_analysis_mode === "two_stage" ? "双层判定" : "逐帧基线"}</span></div><div className="mode-profile-grid">{config.profiles.map((profile) => <button disabled={saving} className={config.default_analysis_mode === profile.id ? "selected" : ""} onClick={() => selectMode(profile.id)} key={profile.id}><div className="mode-profile-head"><strong>{profile.name}</strong><span>{config.default_analysis_mode === profile.id ? "当前默认" : "设为默认"}</span></div><p>{profile.description}</p><dl>{Object.entries(profile.config).map(([key,value]) => <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>)}</dl></button>)}</div>{message && <div className="config-message">{message}</div>}</section><section className="surface list-page"><div className="page-section-title"><div><h2>规则能力</h2><p>正式规则与实验规则明确分组；严重度、确认策略和通知方式由后端决定</p></div><span className="prototype-chip">1 条正式 · 1 条实验</span></div><div className="table-head rule-grid"><span>规则</span><span>能力类型</span><span>确认策略</span><span>严重度</span><span>实现状态</span></div>{rules.map(([code,name,type,strategy,severity,status]) => <div className="table-row rule-grid" key={code}><div><strong>{code} · {name}</strong><span>{status === "experimental" ? "实验规则 · 默认不通知" : "正式验收规则"}</span></div><span>{type}</span><span>{strategy}</span><SeverityBadge value={severity.split("/")[0]} /><span className={status === "ready" ? "ready" : status === "experimental" ? "experimental" : "planned"}>{status === "ready" ? "已实现" : status === "experimental" ? "实验可用" : "后续实现"}</span></div>)}</section></div>;
 }
 
 export default App;

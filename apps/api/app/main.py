@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,12 @@ from .db import Database, utc_now
 class RunCreate(BaseModel):
     video_id: str
     notifications_enabled: bool = False
+    analysis_mode: Literal["frame_baseline", "two_stage"] | None = None
+    rule_code: Literal["E1", "A1"] = "E1"
+
+
+class RuleConfigUpdate(BaseModel):
+    default_analysis_mode: Literal["frame_baseline", "two_stage"]
 
 
 class EventAction(BaseModel):
@@ -131,17 +138,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not database.fetch_one("SELECT id FROM video_assets WHERE id=?", (payload.video_id,)):
             raise HTTPException(404, "视频不存在")
         run_id = f"RUN-{uuid.uuid4().hex[:12].upper()}"
+        configured = database.fetch_one(
+            "SELECT value FROM system_settings WHERE key='default_analysis_mode'"
+        )
+        analysis_mode = payload.analysis_mode or (
+            configured["value"] if configured else "frame_baseline"
+        )
+        if not database.fetch_one(
+            "SELECT id FROM analysis_profiles WHERE id=? AND enabled=1", (analysis_mode,)
+        ):
+            raise HTTPException(400, "分析模式不可用")
         database.execute(
             """
             INSERT INTO analysis_runs
             (id, video_id, status, progress, stage, notifications_enabled,
-             frame_rate, created_at)
-            VALUES (?, ?, 'queued', 0, 'queued', ?, ?, ?)
+             analysis_mode, rule_code, frame_rate, created_at)
+            VALUES (?, ?, 'queued', 0, 'queued', ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
                 payload.video_id,
                 int(payload.notifications_enabled),
+                analysis_mode,
+                payload.rule_code,
                 current_settings.frame_rate,
                 utc_now(),
             ),
@@ -172,6 +191,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "分析任务不存在")
         return run
 
+    @app.get("/api/rules/config")
+    def get_rule_config() -> dict[str, Any]:
+        configured = database.fetch_one(
+            "SELECT value FROM system_settings WHERE key='default_analysis_mode'"
+        )
+        profiles = database.fetch_all(
+            "SELECT * FROM analysis_profiles WHERE enabled=1 ORDER BY id"
+        )
+        for profile in profiles:
+            profile["config"] = json.loads(profile.pop("config_json"))
+        return {
+            "rule": {
+                "code": "E1",
+                "name": "冰箱门持续开启",
+                "threshold_seconds": current_settings.e1_open_seconds,
+                "severity": "P1",
+            },
+            "default_analysis_mode": configured["value"] if configured else "frame_baseline",
+            "profiles": profiles,
+        }
+
+    @app.put("/api/rules/config")
+    def update_rule_config(payload: RuleConfigUpdate) -> dict[str, Any]:
+        if not database.fetch_one(
+            "SELECT id FROM analysis_profiles WHERE id=? AND enabled=1",
+            (payload.default_analysis_mode,),
+        ):
+            raise HTTPException(400, "分析模式不可用")
+        database.execute(
+            """
+            INSERT INTO system_settings(key, value, updated_at)
+            VALUES ('default_analysis_mode', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """,
+            (payload.default_analysis_mode, utc_now()),
+        )
+        return get_rule_config()
+
     @app.get("/api/events")
     def list_events(limit: int = Query(50, ge=1, le=200)) -> list[dict[str, Any]]:
         return database.fetch_all(
@@ -192,10 +249,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_event(event_id: str) -> dict[str, Any]:
         event = database.fetch_one(
             """
-            SELECT e.*, s.name AS store_name, c.name AS camera_name
+            SELECT e.*, s.name AS store_name, c.name AS camera_name,
+                   ar.analysis_mode, ar.prompt_tokens, ar.completion_tokens,
+                   ar.request_count, va.duration_seconds AS video_duration_seconds,
+                   va.original_name AS video_original_name
             FROM inspection_events e
             JOIN stores s ON s.id=e.store_id
             JOIN camera_sources c ON c.id=e.camera_id
+            JOIN analysis_runs ar ON ar.id=e.run_id
+            JOIN video_assets va ON va.id=ar.video_id
             WHERE e.id=?
             """,
             (event_id,),
@@ -268,6 +330,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not evidence or not Path(evidence["image_path"]).exists():
             raise HTTPException(404, "证据不存在")
         return FileResponse(evidence["image_path"], media_type="image/jpeg")
+
+    @app.get("/api/media/events/{event_id}/video")
+    def get_event_video(event_id: str) -> FileResponse:
+        video = database.fetch_one(
+            """
+            SELECT va.storage_path, va.original_name
+            FROM inspection_events e
+            JOIN analysis_runs ar ON ar.id=e.run_id
+            JOIN video_assets va ON va.id=ar.video_id
+            WHERE e.id=?
+            """,
+            (event_id,),
+        )
+        if not video or not Path(video["storage_path"]).exists():
+            raise HTTPException(404, "原始视频不存在")
+        return FileResponse(
+            video["storage_path"],
+            media_type="video/mp4",
+            filename=video["original_name"],
+            content_disposition_type="inline",
+        )
 
     @app.get("/api/dashboard")
     def dashboard() -> dict[str, Any]:

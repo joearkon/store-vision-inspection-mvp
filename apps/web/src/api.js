@@ -1,7 +1,16 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+// Keep production deploys same-origin, but make the local development site
+// independent from how Vite was launched.  Starting Vite from the repository
+// root can otherwise skip apps/web/vite.config.js and return index.html for
+// /api/*, leaving the UI in a permanent loading state.
+const API_BASE = import.meta.env.VITE_API_BASE_URL
+  || (import.meta.env.DEV ? "http://127.0.0.1:8797" : "");
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, options);
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(`接口返回格式异常（${response.status}），请检查前后端连接`);
+  }
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     throw new Error(body?.detail || `请求失败（${response.status}）`);
@@ -9,20 +18,32 @@ async function request(path, options = {}) {
   return body;
 }
 
+export const apiUrl = (path) => `${API_BASE}${path}`;
+
 export const api = {
   bootstrap: () => request("/api/bootstrap"),
   dashboard: () => request("/api/dashboard"),
   events: () => request("/api/events"),
   event: (id) => request(`/api/events/${id}`),
+  evidenceUrl: (id) => apiUrl(`/api/media/evidence/${id}`),
+  eventVideoUrl: (id) => apiUrl(`/api/media/events/${id}/video`),
   runs: () => request("/api/analysis-runs"),
   run: (id) => request(`/api/analysis-runs/${id}`),
-  createRun: (videoId, notificationsEnabled) =>
+  rulesConfig: () => request("/api/rules/config"),
+  updateRulesConfig: (defaultAnalysisMode) => request("/api/rules/config", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ default_analysis_mode: defaultAnalysisMode })
+  }),
+  createRun: (videoId, notificationsEnabled, analysisMode, ruleCode = "E1") =>
     request("/api/analysis-runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         video_id: videoId,
-        notifications_enabled: notificationsEnabled
+        notifications_enabled: notificationsEnabled,
+        analysis_mode: analysisMode,
+        rule_code: ruleCode
       })
     }),
   eventAction: (id, action, note) =>

@@ -77,14 +77,36 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
   progress REAL NOT NULL DEFAULT 0,
   stage TEXT NOT NULL DEFAULT 'queued',
   notifications_enabled INTEGER NOT NULL DEFAULT 0,
+  analysis_mode TEXT NOT NULL DEFAULT 'frame_baseline',
+  rule_code TEXT NOT NULL DEFAULT 'E1',
   frame_rate REAL NOT NULL DEFAULT 1,
   total_frames INTEGER NOT NULL DEFAULT 0,
   processed_frames INTEGER NOT NULL DEFAULT 0,
   error_code TEXT,
   error_message TEXT,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  request_count INTEGER NOT NULL DEFAULT 0,
+  screening_result_json TEXT,
   started_at TEXT,
   completed_at TEXT,
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS analysis_profiles (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  config_json TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS system_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_analysis_runs_status
@@ -196,7 +218,23 @@ class Database:
     def initialize(self) -> None:
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            self._migrate(connection)
         self.seed()
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(analysis_runs)")}
+        additions = {
+            "analysis_mode": "TEXT NOT NULL DEFAULT 'frame_baseline'",
+            "rule_code": "TEXT NOT NULL DEFAULT 'E1'",
+            "prompt_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "completion_tokens": "INTEGER NOT NULL DEFAULT 0",
+            "request_count": "INTEGER NOT NULL DEFAULT 0",
+            "screening_result_json": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(f"ALTER TABLE analysis_runs ADD COLUMN {name} {definition}")
 
     def seed(self) -> None:
         now = utc_now()
@@ -253,6 +291,39 @@ class Database:
                     """,
                     (camera_id, code, name, area_type, status, now),
                 )
+            profiles = (
+                (
+                    "frame_baseline",
+                    "逐帧基线模式",
+                    "按 1 fps 对全部帧逐张识别，准确性基线清晰，但成本与耗时较高。",
+                    {"frame_rate": 1.0, "fallback": False},
+                ),
+                (
+                    "two_stage",
+                    "双层判定模式",
+                    "视频低帧率粗筛疑似区间，再按所选规则复核关键时间点；冲突或异常时回退逐帧。",
+                    {"coarse_fps": 0.2, "rule_specific_refinement": True, "fallback": True},
+                ),
+            )
+            for profile_id, name, description, config in profiles:
+                connection.execute(
+                    """
+                    INSERT INTO analysis_profiles
+                    (id, name, description, config_json, enabled, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      name=excluded.name,
+                      description=excluded.description,
+                      config_json=excluded.config_json,
+                      enabled=excluded.enabled,
+                      updated_at=excluded.updated_at
+                    """,
+                    (profile_id, name, description, self.json(config), now, now),
+                )
+            connection.execute(
+                "INSERT OR IGNORE INTO system_settings VALUES ('default_analysis_mode', 'frame_baseline', ?)",
+                (now,),
+            )
 
     def fetch_one(self, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
         with self.connect() as connection:

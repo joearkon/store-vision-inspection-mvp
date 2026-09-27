@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+.libtv/
+/assets/generated/
 __pycache__/
 *.py[cod]
 .venv/

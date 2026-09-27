@@ -44,6 +44,10 @@ tests/             规则、接口、流程和视觉验收
 - [原始交付物清单](./references/original-v1/README.md)
 - [可运行视觉原型基线](./prototypes/visual-baseline-v1/README.md)
 - [第一阶段产品与交付审计](./docs/PHASE-1-PRODUCT-AUDIT.md)
+- [E1 本地真实闭环测试](./docs/E1-LOCAL-CLOSED-LOOP-TEST-2026-09-27.md)
+- [双模式分析设计与真实 A/B](./docs/DUAL-MODE-ANALYSIS-DESIGN.md)
+- [事件证据交互复核](./docs/EVENT-EVIDENCE-REVIEW.md)
+- [A1 口罩/手套实验规则交付审计](./docs/A1-PPE-RULE-AUDIT-2026-09-27.md)
 
 ## 本地运行
 

@@ -28,3 +28,8 @@ export function statusLabel(status) {
 export function percent(value) {
   return `${Math.round(Number(value || 0) * 100)}%`;
 }
+
+export function timelinePercent(offset, duration) {
+  if (!Number.isFinite(offset) || !Number.isFinite(duration) || duration <= 0) return 0;
+  return Math.min(100, Math.max(0, (offset / duration) * 100));
+}

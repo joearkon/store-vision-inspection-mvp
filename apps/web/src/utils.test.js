@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, percent, statusLabel } from "./utils";
+import { formatDuration, percent, statusLabel, timelinePercent } from "./utils";
 
 describe("display utilities", () => {
   it("formats seconds and minutes", () => {
@@ -14,5 +14,12 @@ describe("display utilities", () => {
   it("uses the canonical event labels", () => {
     expect(statusLabel("pending_confirmation")).toBe("待确认");
     expect(statusLabel("rectifying")).toBe("整改中");
+  });
+
+  it("positions and clamps event markers on a video timeline", () => {
+    expect(timelinePercent(30, 50)).toBe(60);
+    expect(timelinePercent(-1, 50)).toBe(0);
+    expect(timelinePercent(60, 50)).toBe(100);
+    expect(timelinePercent(10, 0)).toBe(0);
   });
 });
