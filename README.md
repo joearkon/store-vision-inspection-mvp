@@ -40,3 +40,6 @@ tests/             规则、接口、流程和视觉验收
 
 - [项目章程](./docs/PROJECT-CHARTER.md)
 - [MVP 场景与技术实现设计](./docs/MVP-SCENARIOS-TECHNICAL-DESIGN.md)
+- [视觉实现契约](./docs/VISUAL-IMPLEMENTATION-CONTRACT.md)
+- [原始交付物清单](./references/original-v1/README.md)
+- [可运行视觉原型基线](./prototypes/visual-baseline-v1/README.md)

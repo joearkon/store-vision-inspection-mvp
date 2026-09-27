@@ -1,0 +1,603 @@
+{
+  "schema": "2.0",
+  "config": {
+    "update_multi": true,
+    "compact_width": false,
+    "enable_forward": true,
+    "streaming_mode": false,
+    "style": {
+      "color": {
+        "bottom_bg": {
+          "light_mode": "rgba(246, 248, 255, 1)",
+          "dark_mode": "rgba(10, 17, 41, 1)"
+        },
+        "footer_text": {
+          "light_mode": "rgba(161, 170, 190, 1)",
+          "dark_mode": "rgba(72, 83, 108, 1)"
+        },
+        "mm_media_item_surface": {
+          "light_mode": "rgba(247, 247, 245, 1)",
+          "dark_mode": "rgba(41, 41, 39, 1)"
+        },
+        "mm_media_icon_surface": {
+          "light_mode": "rgba(255, 255, 255, 1)",
+          "dark_mode": "rgba(55, 55, 52, 1)"
+        },
+        "mm_media_icon_border": {
+          "light_mode": "rgba(31, 35, 41, 0.10)",
+          "dark_mode": "rgba(255, 255, 255, 0.14)"
+        }
+      }
+    },
+    "summary": {
+      "content": "P0严重告警：前台员工未佩戴手套，置信度92%"
+    }
+  },
+  "body": {
+    "direction": "vertical",
+    "horizontal_spacing": "8px",
+    "vertical_spacing": "8px",
+    "horizontal_align": "left",
+    "vertical_align": "top",
+    "padding": "0px 0px 0px 0px",
+    "elements": [
+      {
+        "tag": "markdown",
+        "content": "**<font color='red'>门店视觉巡检告警</font>**<text_tag color='red'>P0-严重</text_tag>",
+        "text_align": "left",
+        "text_size": "heading",
+        "margin": "12px 20px 0px 20px"
+      },
+      {
+        "tag": "markdown",
+        "content": "<font color='grey'>MOMOYO JTU 店 · 前台-01 · 2026-09-27 09:23</font>",
+        "text_align": "left",
+        "text_size": "normal",
+        "margin": "4px 20px 0px 20px"
+      },
+      {
+        "tag": "interactive_container",
+        "behaviors": [],
+        "width": "fill",
+        "height": "auto",
+        "corner_radius": "10px",
+        "has_border": false,
+        "disabled": false,
+        "background_style": "orange-50",
+        "padding": "14px 16px 14px 16px",
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "8px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "margin": "12px 20px 0px 20px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "**<font color='red'>A1 未佩戴手套</font>**  置信度 **92%**",
+            "text_align": "left",
+            "text_size": "normal",
+            "margin": "0px 0px 0px 0px"
+          },
+          {
+            "tag": "markdown",
+            "content": "<font color='grey'>员工在制作黑糖珍珠奶茶时，左手直接接触珍珠容器内壁，未佩戴一次性手套。</font>",
+            "text_align": "left",
+            "text_size": "notation",
+            "margin": "4px 0px 0px 0px"
+          }
+        ]
+      },
+      {
+        "tag": "interactive_container",
+        "behaviors": [],
+        "width": "fill",
+        "height": "auto",
+        "corner_radius": "10px",
+        "has_border": false,
+        "disabled": false,
+        "background_style": "grey-50",
+        "padding": "14px 16px 14px 16px",
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "8px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "margin": "8px 20px 0px 20px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "**判定依据**\n<font color='grey'>《食品操作规范》第 3.2 条：接触即食食品须佩戴一次性手套</font>",
+            "text_align": "left",
+            "text_size": "normal",
+            "margin": "0px 0px 0px 0px"
+          }
+        ]
+      },
+      {
+        "tag": "interactive_container",
+        "behaviors": [],
+        "width": "fill",
+        "height": "auto",
+        "corner_radius": "10px",
+        "has_border": false,
+        "disabled": false,
+        "background_style": "grey-50",
+        "padding": "14px 16px 14px 16px",
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "8px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "margin": "8px 20px 0px 20px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "**整改建议**\n<font color='grey'>立即佩戴一次性手套，已制作饮品建议废弃处理。5 分钟内未确认将自动升级。</font>",
+            "text_align": "left",
+            "text_size": "normal",
+            "margin": "0px 0px 0px 0px"
+          }
+        ]
+      },
+      {
+        "tag": "column_set",
+        "flex_mode": "flow",
+        "background_style": "default",
+        "horizontal_spacing": "8px",
+        "horizontal_align": "left",
+        "columns": [
+          {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "vertical_align": "top",
+            "elements": [
+              {
+                "tag": "button",
+                "text": {
+                  "tag": "plain_text",
+                  "content": "查看详情",
+                  "text_align": "left"
+                },
+                "type": "primary_filled",
+                "width": "fill",
+                "name": "Button_view_detail"
+              }
+            ]
+          },
+          {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "vertical_align": "top",
+            "elements": [
+              {
+                "tag": "button",
+                "text": {
+                  "tag": "plain_text",
+                  "content": "标记已处理",
+                  "text_align": "left"
+                },
+                "type": "default",
+                "width": "fill",
+                "name": "Button_mark_resolved"
+              }
+            ]
+          }
+        ],
+        "margin": "12px 20px 0px 20px"
+      },
+      {
+        "tag": "interactive_container",
+        "behaviors": [],
+        "width": "fill",
+        "height": "auto",
+        "corner_radius": "",
+        "has_border": false,
+        "disabled": false,
+        "background_style": "bottom_bg",
+        "padding": "12px 4px 12px 4px",
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "8px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "margin": "12px 0px 0px 0px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "<font color='footer_text'>来自：门店视觉巡检系统 · AI 自动检测 · EVT-0927-001</font>",
+            "text_align": "left",
+            "text_size": "small",
+            "margin": "0px 20px 0px 16px"
+          }
+        ]
+      }
+    ]
+  }
+}{
+  "schema": "2.0",
+  "config": {
+    "update_multi": true,
+    "compact_width": false,
+    "enable_forward": true,
+    "streaming_mode": false,
+    "style": {
+      "color": {
+        "bottom_bg": {
+          "light_mode": "rgba(246, 248, 255, 1)",
+          "dark_mode": "rgba(10, 17, 41, 1)"
+        },
+        "footer_text": {
+          "light_mode": "rgba(161, 170, 190, 1)",
+          "dark_mode": "rgba(72, 83, 108, 1)"
+        },
+        "mm_media_item_surface": {
+          "light_mode": "rgba(247, 247, 245, 1)",
+          "dark_mode": "rgba(41, 41, 39, 1)"
+        },
+        "mm_media_icon_surface": {
+          "light_mode": "rgba(255, 255, 255, 1)",
+          "dark_mode": "rgba(55, 55, 52, 1)"
+        },
+        "mm_media_icon_border": {
+          "light_mode": "rgba(31, 35, 41, 0.10)",
+          "dark_mode": "rgba(255, 255, 255, 0.14)"
+        }
+      }
+    },
+    "summary": {
+      "content": "P1一般告警：冷藏柜门未关闭，置信度87%"
+    }
+  },
+  "body": {
+    "direction": "vertical",
+    "horizontal_spacing": "8px",
+    "vertical_spacing": "8px",
+    "horizontal_align": "left",
+    "vertical_align": "top",
+    "padding": "0px 0px 0px 0px",
+    "elements": [
+      {
+        "tag": "markdown",
+        "content": "**<font color='indigo'>门店视觉巡检告警</font>**<text_tag color='orange'>P1-一般</text_tag>",
+        "text_align": "left",
+        "text_size": "heading",
+        "margin": "12px 20px 0px 20px"
+      },
+      {
+        "tag": "markdown",
+        "content": "<font color='grey'>MOMOYO JTU 店 · 仓储区-01 · 2026-09-27 08:45</font>",
+        "text_align": "left",
+        "text_size": "normal",
+        "margin": "4px 20px 0px 20px"
+      },
+      {
+        "tag": "interactive_container",
+        "behaviors": [],
+        "width": "fill",
+        "height": "auto",
+        "corner_radius": "10px",
+        "has_border": false,
+        "disabled": false,
+        "background_style": "blue-50",
+        "padding": "14px 16px 14px 16px",
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "8px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "margin": "12px 20px 0px 20px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "**<font color='orange'>E1 冰箱门未关</font>**  置信度 **87%**",
+            "text_align": "left",
+            "text_size": "normal",
+            "margin": "0px 0px 0px 0px"
+          },
+          {
+            "tag": "markdown",
+            "content": "<font color='grey'>仓储区冷藏柜门敞开超过 30 秒，内部牛奶及水果原料暴露于室温环境。</font>",
+            "text_align": "left",
+            "text_size": "notation",
+            "margin": "4px 0px 0px 0px"
+          }
+        ]
+      },
+      {
+        "tag": "interactive_container",
+        "behaviors": [],
+        "width": "fill",
+        "height": "auto",
+        "corner_radius": "10px",
+        "has_border": false,
+        "disabled": false,
+        "background_style": "grey-50",
+        "padding": "14px 16px 14px 16px",
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "8px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "margin": "8px 20px 0px 20px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "**整改建议**\n<font color='grey'>立即关闭冷藏柜门，检查内部原料温度是否异常。如温度超标，按报损流程处理。</font>",
+            "text_align": "left",
+            "text_size": "normal",
+            "margin": "0px 0px 0px 0px"
+          }
+        ]
+      },
+      {
+        "tag": "column_set",
+        "flex_mode": "flow",
+        "background_style": "default",
+        "horizontal_spacing": "8px",
+        "horizontal_align": "left",
+        "columns": [
+          {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "vertical_align": "top",
+            "elements": [
+              {
+                "tag": "button",
+                "text": {
+                  "tag": "plain_text",
+                  "content": "查看详情",
+                  "text_align": "left"
+                },
+                "type": "primary_filled",
+                "width": "fill",
+                "name": "Button_view_detail"
+              }
+            ]
+          },
+          {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "vertical_align": "top",
+            "elements": [
+              {
+                "tag": "button",
+                "text": {
+                  "tag": "plain_text",
+                  "content": "标记已处理",
+                  "text_align": "left"
+                },
+                "type": "default",
+                "width": "fill",
+                "name": "Button_mark_resolved"
+              }
+            ]
+          }
+        ],
+        "margin": "12px 20px 0px 20px"
+      },
+      {
+        "tag": "interactive_container",
+        "behaviors": [],
+        "width": "fill",
+        "height": "auto",
+        "corner_radius": "",
+        "has_border": false,
+        "disabled": false,
+        "background_style": "bottom_bg",
+        "padding": "12px 4px 12px 4px",
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "8px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "margin": "12px 0px 0px 0px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "<font color='footer_text'>来自：门店视觉巡检系统 · AI 自动检测 · EVT-0927-002</font>",
+            "text_align": "left",
+            "text_size": "small",
+            "margin": "0px 20px 0px 16px"
+          }
+        ]
+      }
+    ]
+  }
+}{
+  "schema": "2.0",
+  "config": {
+    "update_multi": true,
+    "compact_width": false,
+    "enable_forward": true,
+    "streaming_mode": false,
+    "style": {
+      "color": {
+        "bottom_bg": {
+          "light_mode": "rgba(246, 248, 255, 1)",
+          "dark_mode": "rgba(10, 17, 41, 1)"
+        },
+        "footer_text": {
+          "light_mode": "rgba(161, 170, 190, 1)",
+          "dark_mode": "rgba(72, 83, 108, 1)"
+        },
+        "mm_media_item_surface": {
+          "light_mode": "rgba(247, 247, 245, 1)",
+          "dark_mode": "rgba(41, 41, 39, 1)"
+        },
+        "mm_media_icon_surface": {
+          "light_mode": "rgba(255, 255, 255, 1)",
+          "dark_mode": "rgba(55, 55, 52, 1)"
+        },
+        "mm_media_icon_border": {
+          "light_mode": "rgba(31, 35, 41, 0.10)",
+          "dark_mode": "rgba(255, 255, 255, 0.14)"
+        }
+      }
+    },
+    "summary": {
+      "content": "SLA升级：P0告警超时未处理，需管理员介入"
+    }
+  },
+  "body": {
+    "direction": "vertical",
+    "horizontal_spacing": "8px",
+    "vertical_spacing": "8px",
+    "horizontal_align": "left",
+    "vertical_align": "top",
+    "padding": "0px 0px 0px 0px",
+    "elements": [
+      {
+        "tag": "markdown",
+        "content": "**<font color='red'>SLA 升级提醒</font>**<text_tag color='red'>超时未处理</text_tag>",
+        "text_align": "left",
+        "text_size": "heading",
+        "margin": "12px 20px 0px 20px"
+      },
+      {
+        "tag": "markdown",
+        "content": "<font color='grey'>MOMOYO JTU 店 · 2026-09-27 09:28 · 已超时 5 分钟</font>",
+        "text_align": "left",
+        "text_size": "normal",
+        "margin": "4px 20px 0px 20px"
+      },
+      {
+        "tag": "interactive_container",
+        "behaviors": [],
+        "width": "fill",
+        "height": "auto",
+        "corner_radius": "10px",
+        "has_border": false,
+        "disabled": false,
+        "background_style": "grey-900",
+        "padding": "14px 16px 14px 16px",
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "8px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "margin": "12px 20px 0px 20px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "<font color='white'>**P0 告警已超时未确认**</font>",
+            "text_align": "left",
+            "text_size": "normal",
+            "margin": "0px 0px 0px 0px"
+          },
+          {
+            "tag": "markdown",
+            "content": "<font color='white'>原事件：前台员工未佩戴手套（A1）· 置信度 92%\n触发时间：09:23 · 当前状态：未确认</font>",
+            "text_align": "left",
+            "text_size": "notation",
+            "margin": "4px 0px 0px 0px"
+          }
+        ]
+      },
+      {
+        "tag": "interactive_container",
+        "behaviors": [],
+        "width": "fill",
+        "height": "auto",
+        "corner_radius": "10px",
+        "has_border": false,
+        "disabled": false,
+        "background_style": "orange-50",
+        "padding": "12px 8px 12px 8px",
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "8px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "margin": "12px 20px 0px 20px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "<font color='orange'>**管理员介入**</font>：该 P0 事件已超过 5 分钟未处理，建议立即联系门店店长确认并整改。",
+            "text_align": "left",
+            "text_size": "normal",
+            "margin": "0px 6px 0px 6px"
+          }
+        ]
+      },
+      {
+        "tag": "column_set",
+        "flex_mode": "flow",
+        "background_style": "default",
+        "horizontal_spacing": "8px",
+        "horizontal_align": "left",
+        "columns": [
+          {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "vertical_align": "top",
+            "elements": [
+              {
+                "tag": "button",
+                "text": {
+                  "tag": "plain_text",
+                  "content": "查看原事件",
+                  "text_align": "left"
+                },
+                "type": "primary_filled",
+                "width": "fill",
+                "name": "Button_view_original"
+              }
+            ]
+          },
+          {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "vertical_align": "top",
+            "elements": [
+              {
+                "tag": "button",
+                "text": {
+                  "tag": "plain_text",
+                  "content": "强制关闭",
+                  "text_align": "left"
+                },
+                "type": "default",
+                "width": "fill",
+                "name": "Button_force_close"
+              }
+            ]
+          }
+        ],
+        "margin": "12px 20px 0px 20px"
+      },
+      {
+        "tag": "interactive_container",
+        "behaviors": [],
+        "width": "fill",
+        "height": "auto",
+        "corner_radius": "",
+        "has_border": false,
+        "disabled": false,
+        "background_style": "bottom_bg",
+        "padding": "12px 4px 12px 4px",
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "8px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "margin": "12px 0px 0px 0px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "<font color='footer_text'>来自：门店视觉巡检系统 · AI 自动检测 · EVT-0927-001-ESC</font>",
+            "text_align": "left",
+            "text_size": "small",
+            "margin": "0px 20px 0px 16px"
+          }
+        ]
+      }
+    ]
+  }
+}

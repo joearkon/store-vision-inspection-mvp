@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="creative-medium" content="interactive-prototype" />
+  <title>门店视觉巡检 Dashboard</title>
+  <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+  <script src="https://sf3-scmcdn-cn.feishucdn.com/obj/feishu-static/miaoda/coding-unpkg-sdk/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://sf3-scmcdn-cn.feishucdn.com/obj/feishu-static/miaoda/coding-unpkg-sdk/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://sf3-scmcdn-cn.feishucdn.com/obj/feishu-static/miaoda/coding-unpkg-sdk/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      font-size: 14px;
+      color: #0F172A;
+      background: #F8FAFC;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      min-width: 1200px;
+    }
+    #root {
+      height: 100%;
+    }
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #CBD5E1;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94A3B8;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.15); }
+    }
+
+    @keyframes progress {
+      0% { width: 0%; }
+      50% { width: 70%; }
+      100% { width: 100%; }
+    }
+
+    /* Page transition */
+    .page-fade {
+      animation: fadeIn 0.25s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    select, input, textarea {
+      outline: none;
+    }
+    select:focus, input:focus, textarea:focus {
+      border-color: #4F46E5 !important;
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Tweaks panel -->
+  <script type="text/babel" src="components/tweaks-panel.jsx"></script>
+
+  <!-- Data -->
+  <script src="data/mockData.js"></script>
+
+  <!-- Shared components -->
+  <script type="text/babel" src="components/Shared.jsx"></script>
+
+  <!-- Page components -->
+  <script type="text/babel" src="components/DashboardPage.jsx"></script>
+  <script type="text/babel" src="components/EventDetailPage.jsx"></script>
+  <script type="text/babel" src="components/UploadPage.jsx"></script>
+  <script type="text/babel" src="components/CameraManagementPage.jsx"></script>
+  <script type="text/babel" src="components/RectificationPage.jsx"></script>
+  <script type="text/babel" src="components/WorkOrderPage.jsx"></script>
+  <script type="text/babel" src="components/CardPreviewPage.jsx"></script>
+
+  <!-- Main App -->
+  <script type="text/babel">
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "primaryColor": "#4F46E5",
+      "density": "regular",
+      "storeName": "MOMOYO JTU"
+    }/*EDITMODE-END*/;
+
+    const NAV_ITEMS = [
+      { key: "dashboard", label: "监控大盘", icon: "dashboard" },
+      { key: "event", label: "事件详情", icon: "event", hidden: true },
+      { key: "upload", label: "视频上传", icon: "upload" },
+      { key: "cameras", label: "摄像头管理", icon: "camera" },
+      { key: "rectification", label: "整改跟踪", icon: "rectification" },
+      { key: "workorder", label: "整改工单", icon: "workorder" },
+      { key: "cards", label: "飞书卡片", icon: "card" }
+    ];
+
+    function App() {
+      const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+      const [page, setPage] = React.useState("dashboard");
+      const [pageParams, setPageParams] = React.useState({});
+
+      const navigate = (pageKey, params = {}) => {
+        setPage(pageKey);
+        setPageParams(params);
+        // Scroll to top
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+
+      const renderPage = () => {
+        switch (page) {
+          case "dashboard":
+            return React.createElement(DashboardPage, { onNavigate: navigate });
+          case "event":
+            return React.createElement(EventDetailPage, {
+              eventId: pageParams.eventId || "EVT-0927-001",
+              onNavigate: navigate
+            });
+          case "upload":
+            return React.createElement(UploadPage, { onNavigate: navigate });
+          case "cameras":
+            return React.createElement(CameraManagementPage, { onNavigate: navigate });
+          case "rectification":
+            return React.createElement(RectificationPage, { onNavigate: navigate });
+          case "workorder":
+            return React.createElement(WorkOrderPage, { onNavigate: navigate });
+          case "cards":
+            return React.createElement(CardPreviewPage, { onNavigate: navigate });
+          default:
+            return React.createElement(DashboardPage, { onNavigate: navigate });
+        }
+      };
+
+      return React.createElement(
+        "div",
+        {
+          style: {
+            display: "flex",
+            height: "100vh",
+            minHeight: "100vh",
+            overflow: "hidden"
+          }
+        },
+          // Sidebar
+          React.createElement(Sidebar, {
+            currentPage: page,
+            onNavigate: navigate,
+            primaryColor: t.primaryColor,
+            storeName: t.storeName
+          }),
+          // Main area
+          React.createElement(
+            "div",
+            {
+              style: {
+                flex: 1,
+                display: "flex",
+                flexDirection: "column",
+                minWidth: 0,
+                overflow: "hidden"
+              }
+            },
+            // Header
+            React.createElement(Header, {
+              currentPage: page,
+              primaryColor: t.primaryColor,
+              storeName: t.storeName,
+              onNavigate: navigate
+            }),
+            // Content
+            React.createElement(
+              "main",
+              {
+                className: "page-fade",
+                key: page + (pageParams.eventId || ""),
+                style: {
+                  flex: 1,
+                  overflowY: "auto",
+                  padding: "24px 28px",
+                  background: "#F8FAFC"
+                }
+              },
+              renderPage()
+            )
+          ),
+          // Tweaks panel
+          React.createElement(
+            TweaksPanel,
+            {},
+            React.createElement(TweakSection, { label: "主题" }),
+            React.createElement(TweakColor, {
+              label: "主题色",
+              value: t.primaryColor,
+              options: ["#4F46E5", "#2563EB", "#0891B2", "#7C3AED"],
+              onChange: v => setTweak("primaryColor", v)
+            }),
+            React.createElement(TweakSection, { label: "门店" }),
+            React.createElement(TweakText, {
+              label: "门店名称",
+              value: t.storeName,
+              onChange: v => setTweak("storeName", v)
+            })
+          )
+        );
+    }
+
+    function Sidebar({ currentPage, onNavigate, primaryColor, storeName }) {
+      const visibleNav = NAV_ITEMS.filter(n => !n.hidden);
+
+      return React.createElement(
+        "aside",
+        {
+          style: {
+            width: "232px",
+            background: "#0F172A",
+            color: "#CBD5E1",
+            display: "flex",
+            flexDirection: "column",
+            flexShrink: 0,
+            borderRight: "1px solid #1E293B"
+          }
+        },
+        // Logo
+        React.createElement(
+          "div",
+          {
+            style: {
+              padding: "20px 20px 18px",
+              borderBottom: "1px solid #1E293B",
+              display: "flex",
+              alignItems: "center",
+              gap: "10px"
+            }
+          },
+          React.createElement(
+            "div",
+            {
+              style: {
+                width: "36px",
+                height: "36px",
+                borderRadius: "8px",
+                background: `linear-gradient(135deg, ${primaryColor}, #7C3AED)`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#FFFFFF",
+                fontWeight: 700,
+                fontSize: "14px",
+                flexShrink: 0
+              }
+            },
+            "AI"
+          ),
+          React.createElement(
+            "div",
+            {},
+            React.createElement("div", {
+              style: { fontSize: "14px", fontWeight: 700, color: "#F8FAFC", lineHeight: 1.3 }
+            }, "视觉巡检系统"),
+            React.createElement("div", {
+              style: { fontSize: "11px", color: "#64748B", marginTop: "2px" }
+            }, "Store Visual Inspection")
+          )
+        ),
+
+        // Store selector
+        React.createElement(
+          "div",
+          {
+            style: {
+              padding: "14px 16px",
+              borderBottom: "1px solid #1E293B"
+            }
+          },
+          React.createElement(
+            "div",
+            {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "8px 12px",
+                background: "rgba(30, 41, 59, 0.5)",
+                borderRadius: "6px",
+                cursor: "pointer"
+              }
+            },
+            React.createElement(
+              "div",
+              { style: { display: "flex", alignItems: "center", gap: "8px" } },
+              React.createElement(
+                "div",
+                {
+                  style: {
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    background: "#10B981",
+                    boxShadow: "0 0 0 2px rgba(16, 185, 129, 0.2)"
+                  }
+                }
+              ),
+              React.createElement(
+                "span",
+                { style: { fontSize: "13px", fontWeight: 600, color: "#F1F5F9" } },
+                storeName
+              )
+            ),
+            React.createElement(
+              "svg",
+              {
+                width: "14", height: "14", viewBox: "0 0 24 24",
+                fill: "none", stroke: "#64748B", strokeWidth: "2",
+                strokeLinecap: "round", strokeLinejoin: "round"
+              },
+              React.createElement("polyline", { points: "6 9 12 15 18 9" })
+            )
+          )
+        ),
+
+        // Nav items
+        React.createElement(
+          "nav",
+          { style: { padding: "12px 10px", flex: 1, overflowY: "auto" } },
+          visibleNav.map(item => {
+            const isActive = currentPage === item.key ||
+              (currentPage === "event" && item.key === "rectification");
+            return React.createElement(
+              "button",
+              {
+                key: item.key,
+                onClick: () => onNavigate(item.key),
+                style: {
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  padding: "9px 12px",
+                  marginBottom: "2px",
+                  borderRadius: "6px",
+                  border: "none",
+                  background: isActive
+                    ? `${primaryColor}20`
+                    : "transparent",
+                  color: isActive ? "#FFFFFF" : "#94A3B8",
+                  cursor: "pointer",
+                  fontSize: "13px",
+                  fontWeight: isActive ? 600 : 500,
+                  textAlign: "left",
+                  fontFamily: "inherit",
+                  transition: "all 0.15s"
+                },
+                onMouseEnter: e => {
+                  if (!isActive) {
+                    e.currentTarget.style.background = "rgba(30, 41, 59, 0.8)";
+                    e.currentTarget.style.color = "#E2E8F0";
+                  }
+                },
+                onMouseLeave: e => {
+                  if (!isActive) {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = "#94A3B8";
+                  }
+                }
+              },
+              React.createElement("span", {
+                style: {
+                  color: isActive ? primaryColor : "currentColor",
+                  display: "flex",
+                  alignItems: "center"
+                },
+                dangerouslySetInnerHTML: { __html: window.ICONS[item.icon] }
+              }),
+              item.label
+            );
+          })
+        ),
+
+        // User info
+        React.createElement(
+          "div",
+          {
+            style: {
+              padding: "14px 16px",
+              borderTop: "1px solid #1E293B",
+              display: "flex",
+              alignItems: "center",
+              gap: "10px"
+            }
+          },
+          React.createElement(
+            "div",
+            {
+              style: {
+                width: "32px",
+                height: "32px",
+                borderRadius: "50%",
+                background: "#334155",
+                color: "#E2E8F0",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "12px",
+                fontWeight: 600,
+                flexShrink: 0
+              }
+            },
+            "李"
+          ),
+          React.createElement(
+            "div",
+            { style: { flex: 1, minWidth: 0 } },
+            React.createElement("div", {
+              style: { fontSize: "12px", fontWeight: 600, color: "#E2E8F0" }
+            }, "李明"),
+            React.createElement("div", {
+              style: { fontSize: "11px", color: "#64748B" }
+            }, "门店店长")
+          )
+        )
+      );
+    }
+
+    function Header({ currentPage, primaryColor, storeName, onNavigate }) {
+      const pageInfo = {
+        dashboard: { title: "监控大盘", desc: "实时查看门店监控画面与异常告警" },
+        event: { title: "事件详情", desc: "AI 视觉分析结果与证据" },
+        upload: { title: "视频上传分析", desc: "上传监控视频进行 AI 检测" },
+        cameras: { title: "摄像头管理", desc: "管理门店所有监控摄像头" },
+        rectification: { title: "整改跟踪", desc: "追踪事件整改进度与 SLA" },
+        workorder: { title: "整改工单", desc: "AI 自动派单 · SLA 逐级升级 · 全流程可追溯" },
+        cards: { title: "飞书卡片预览", desc: "飞书告警卡片 JSON 模板" }
+      };
+
+      const info = pageInfo[currentPage] || pageInfo.dashboard;
+
+      return React.createElement(
+        "header",
+        {
+          style: {
+            height: "60px",
+            background: "#FFFFFF",
+            borderBottom: "1px solid #E2E8F0",
+            padding: "0 28px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexShrink: 0
+          }
+        },
+        React.createElement(
+          "div",
+          { style: { display: "flex", flexDirection: "column" } },
+          React.createElement("h1", {
+            style: {
+              fontSize: "16px",
+              fontWeight: 700,
+              color: "#0F172A",
+              margin: 0,
+              lineHeight: 1.3
+            }
+          }, `门店视觉巡检 · ${info.title}`),
+          React.createElement("span", {
+            style: { fontSize: "11px", color: "#94A3B8", marginTop: "2px" }
+          }, info.desc)
+        ),
+        React.createElement(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: "12px" } },
+          // Notifications
+          React.createElement(
+            "button",
+            {
+              style: {
+                width: "36px",
+                height: "36px",
+                borderRadius: "6px",
+                border: "none",
+                background: "#F1F5F9",
+                color: "#64748B",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                position: "relative"
+              }
+            },
+            React.createElement("svg", {
+              width: "18", height: "18", viewBox: "0 0 24 24",
+              fill: "none", stroke: "currentColor", strokeWidth: "2",
+              strokeLinecap: "round", strokeLinejoin: "round"
+            },
+              React.createElement("path", { d: "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" }),
+              React.createElement("path", { d: "M13.73 21a2 2 0 0 1-3.46 0" })
+            ),
+            React.createElement(
+              "span",
+              {
+                style: {
+                  position: "absolute",
+                  top: "6px",
+                  right: "6px",
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  background: "#DC2626",
+                  border: "2px solid #F1F5F9"
+                }
+              }
+            )
+          ),
+          // AI status chip
+          React.createElement(
+            "div",
+            {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "6px 12px",
+                background: "rgba(124, 58, 237, 0.08)",
+                border: "1px solid rgba(124, 58, 237, 0.2)",
+                borderRadius: "999px",
+                fontSize: "11px",
+                color: "#7C3AED",
+                fontWeight: 600
+              }
+            },
+            React.createElement("span", {
+              style: {
+                width: "6px",
+                height: "6px",
+                borderRadius: "50%",
+                background: "#7C3AED",
+                animation: "pulse 2s infinite"
+              }
+            }),
+            "AI 实时检测中"
+          ),
+          // Store selector badge
+          React.createElement(
+            "div",
+            {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "6px 12px",
+                background: "#F1F5F9",
+                borderRadius: "6px",
+                fontSize: "12px",
+                color: "#334155",
+                cursor: "pointer"
+              }
+            },
+            React.createElement(
+              "span",
+              {
+                style: {
+                  display: "inline-block",
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  background: "#10B981",
+                  marginRight: "4px"
+                }
+              }
+            ),
+            React.createElement("span", {
+              style: { display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", background: "#10B981" }
+            }),
+            React.createElement("span", { style: { fontWeight: 500 } }, storeName),
+            React.createElement(
+              "svg",
+              {
+                width: "12", height: "12", viewBox: "0 0 24 24",
+                fill: "none", stroke: "#94A3B8", strokeWidth: "2.5",
+                strokeLinecap: "round", strokeLinejoin: "round"
+              },
+              React.createElement("polyline", { points: "6 9 12 15 18 9" })
+            )
+          )
+        )
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
