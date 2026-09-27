@@ -43,3 +43,27 @@ tests/             规则、接口、流程和视觉验收
 - [视觉实现契约](./docs/VISUAL-IMPLEMENTATION-CONTRACT.md)
 - [原始交付物清单](./references/original-v1/README.md)
 - [可运行视觉原型基线](./prototypes/visual-baseline-v1/README.md)
+- [第一阶段产品与交付审计](./docs/PHASE-1-PRODUCT-AUDIT.md)
+
+## 本地运行
+
+```powershell
+# API
+python -m uvicorn apps.api.app.main:app --host 127.0.0.1 --port 8797
+
+# Worker（另一个终端）
+python -m apps.worker.run
+
+# Web（另一个终端）
+cd apps/web
+npm install
+npm run dev
+```
+
+访问 `http://127.0.0.1:5173/`。首次真实分析前，将 `.env.example` 复制为 `.env` 并配置火山引擎密钥；不要提交 `.env`。
+
+## 验证
+
+```powershell
+./scripts/verify.ps1
+```
