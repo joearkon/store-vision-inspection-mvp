@@ -35,3 +35,8 @@ tests/             规则、接口、流程和视觉验收
 ```
 
 真实的火山引擎密钥、飞书 Webhook 和其他凭据不得提交到仓库。
+
+## 设计文档
+
+- [项目章程](./docs/PROJECT-CHARTER.md)
+- [MVP 场景与技术实现设计](./docs/MVP-SCENARIOS-TECHNICAL-DESIGN.md)
