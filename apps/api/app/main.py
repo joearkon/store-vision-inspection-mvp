@@ -5,8 +5,10 @@ import json
 import shutil
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +23,7 @@ class RunCreate(BaseModel):
     video_id: str
     notifications_enabled: bool = False
     analysis_mode: Literal["frame_baseline", "two_stage"] | None = None
-    rule_code: Literal["E1", "A1"] = "E1"
+    rule_code: Literal["E1", "A1"] | None = None
 
 
 class RuleConfigUpdate(BaseModel):
@@ -31,11 +33,13 @@ class RuleConfigUpdate(BaseModel):
 class EventAction(BaseModel):
     action: str
     note: str | None = None
+    assignee_id: str | None = None
     actor_id: str = "USER-ADMIN"
 
 
 EVENT_TRANSITIONS = {
     "acknowledge": ("acknowledged", "已确认"),
+    "assign": ("acknowledged", "已指派整改"),
     "start_rectification": ("rectifying", "开始整改"),
     "resolve": ("resolved", "已解决"),
     "mark_false_positive": ("false_positive", "标记误报"),
@@ -135,8 +139,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/analysis-runs", status_code=201)
     def create_run(payload: RunCreate) -> dict[str, Any]:
-        if not database.fetch_one("SELECT id FROM video_assets WHERE id=?", (payload.video_id,)):
+        video = database.fetch_one(
+            """SELECT va.id, c.area_type FROM video_assets va
+               JOIN camera_sources c ON c.id=va.camera_id WHERE va.id=?""",
+            (payload.video_id,),
+        )
+        if not video:
             raise HTTPException(404, "视频不存在")
+        rule_code = payload.rule_code or {"storage": "E1", "front_counter": "A1"}.get(video["area_type"])
+        if not rule_code:
+            raise HTTPException(400, "该摄像头区域暂无已实现的自动检测规则")
         run_id = f"RUN-{uuid.uuid4().hex[:12].upper()}"
         configured = database.fetch_one(
             "SELECT value FROM system_settings WHERE key='default_analysis_mode'"
@@ -158,9 +170,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             (
                 run_id,
                 payload.video_id,
-                int(payload.notifications_enabled),
+                int(payload.notifications_enabled and rule_code != "A1"),
                 analysis_mode,
-                payload.rule_code,
+                rule_code,
                 current_settings.frame_rate,
                 utc_now(),
             ),
@@ -258,12 +270,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return database.fetch_all(
             """
             SELECT e.*, s.name AS store_name, c.name AS camera_name,
+                   u.display_name AS assignee_name,
                    CASE WHEN e.status NOT IN ('resolved','false_positive','ignored')
                              AND e.due_at IS NOT NULL AND e.due_at < ?
                         THEN 1 ELSE 0 END AS overdue
             FROM inspection_events e
             JOIN stores s ON s.id=e.store_id
             JOIN camera_sources c ON c.id=e.camera_id
+            LEFT JOIN users u ON u.id=e.assignee_id
             ORDER BY e.created_at DESC LIMIT ?
             """,
             (utc_now(), limit),
@@ -274,12 +288,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         event = database.fetch_one(
             """
             SELECT e.*, s.name AS store_name, c.name AS camera_name,
+                   u.display_name AS assignee_name,
                    ar.analysis_mode, ar.prompt_tokens, ar.completion_tokens,
                    ar.request_count, va.duration_seconds AS video_duration_seconds,
                    va.original_name AS video_original_name
             FROM inspection_events e
             JOIN stores s ON s.id=e.store_id
             JOIN camera_sources c ON c.id=e.camera_id
+            LEFT JOIN users u ON u.id=e.assignee_id
             JOIN analysis_runs ar ON ar.id=e.run_id
             JOIN video_assets va ON va.id=ar.video_id
             WHERE e.id=?
@@ -302,6 +318,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return event
 
+    @app.get("/api/events/{event_id}/assignees")
+    def list_event_assignees(event_id: str) -> list[dict[str, Any]]:
+        event = database.fetch_one("SELECT store_id FROM inspection_events WHERE id=?", (event_id,))
+        if not event:
+            raise HTTPException(404, "事件不存在")
+        return database.fetch_all(
+            """SELECT id, display_name, role, store_id FROM users
+               WHERE active=1 AND (store_id=? OR (store_id IS NULL AND role='system_admin'))
+               ORDER BY store_id IS NULL, display_name""",
+            (event["store_id"],),
+        )
+
     @app.post("/api/events/{event_id}/actions")
     def apply_event_action(event_id: str, payload: EventAction) -> dict[str, Any]:
         event = database.fetch_one("SELECT * FROM inspection_events WHERE id=?", (event_id,))
@@ -309,10 +337,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "事件不存在")
         if payload.action not in EVENT_TRANSITIONS:
             raise HTTPException(400, "不支持的事件动作")
+        allowed = {
+            "pending_confirmation": {"acknowledge", "assign", "mark_false_positive", "ignore"},
+            "acknowledged": {"assign", "start_rectification", "mark_false_positive", "ignore"},
+            "rectifying": {"assign", "resolve"},
+        }
+        if payload.action not in allowed.get(event["status"], set()):
+            raise HTTPException(409, "当前状态不允许此操作")
+        note = (payload.note or "").strip()
+        if payload.action in {"assign", "resolve", "mark_false_positive"} and not note:
+            raise HTTPException(400, "请填写处理说明")
+        assignee_id = event["assignee_id"]
+        if payload.action == "assign":
+            assignee = database.fetch_one(
+                """SELECT id FROM users WHERE id=? AND active=1
+                   AND (store_id=? OR (store_id IS NULL AND role='system_admin'))""",
+                (payload.assignee_id, event["store_id"]),
+            )
+            if not assignee:
+                raise HTTPException(400, "请选择本门店可用的负责人")
+            assignee_id = assignee["id"]
+        if payload.action == "start_rectification" and not assignee_id:
+            raise HTTPException(409, "请先指派整改负责人")
         next_status, label = EVENT_TRANSITIONS[payload.action]
-        terminal = {"resolved", "false_positive", "ignored"}
-        if event["status"] in terminal:
-            raise HTTPException(409, "终态事件不能继续变更")
+        if payload.action == "assign" and event["status"] == "rectifying":
+            next_status = "rectifying"
         now = utc_now()
         resolved_at = now if next_status == "resolved" else event["resolved_at"]
         acknowledged_at = (
@@ -322,16 +371,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         database.execute(
             """
             UPDATE inspection_events
-            SET status=?, acknowledged_at=?, resolved_at=?, updated_at=?
+            SET status=?, assignee_id=?, acknowledged_at=?, resolved_at=?, updated_at=?
             WHERE id=?
             """,
-            (next_status, acknowledged_at, resolved_at, now, event_id),
+            (next_status, assignee_id, acknowledged_at, resolved_at, now, event_id),
         )
         database.execute(
             """
             INSERT INTO event_action_logs
-            (id, event_id, actor_id, action, from_status, to_status, note, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (id, event_id, actor_id, action, from_status, to_status, note, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 f"LOG-{uuid.uuid4().hex[:12].upper()}",
@@ -340,7 +389,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.action,
                 event["status"],
                 next_status,
-                payload.note or label,
+                note or label,
+                json.dumps({"assignee_id": assignee_id}, ensure_ascii=False)
+                if payload.action == "assign" else None,
                 now,
             ),
         )
@@ -379,9 +430,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/dashboard")
     def dashboard() -> dict[str, Any]:
         events = list_events(8)
-        pending = sum(
-            event["status"] not in {"resolved", "false_positive", "ignored"}
-            for event in events
+        local_now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        local_start = datetime.combine(local_now.date(), time.min, tzinfo=ZoneInfo("Asia/Shanghai"))
+        local_end = datetime.combine(local_now.date(), time.max, tzinfo=ZoneInfo("Asia/Shanghai"))
+        today = database.fetch_one(
+            "SELECT COUNT(*) AS count FROM inspection_events WHERE created_at>=? AND created_at<=?",
+            (local_start.astimezone(timezone.utc).isoformat(),
+             local_end.astimezone(timezone.utc).isoformat()),
+        )
+        pending = database.fetch_one(
+            "SELECT COUNT(*) AS count FROM inspection_events WHERE status NOT IN ('resolved','false_positive','ignored')"
         )
         online = database.fetch_one(
             "SELECT COUNT(*) AS count FROM camera_sources WHERE status='online'"
@@ -392,8 +450,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return {
             "metrics": {
-                "today_events": len(events),
-                "pending_events": pending,
+                "today_events": today["count"] if today else 0,
+                "pending_events": pending["count"] if pending else 0,
                 "online_cameras": online["count"] if online else 0,
                 "total_cameras": total["count"] if total else 0,
                 "completed_runs": completed_runs["count"] if completed_runs else 0,

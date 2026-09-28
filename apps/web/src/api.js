@@ -25,6 +25,7 @@ export const api = {
   dashboard: () => request("/api/dashboard"),
   events: () => request("/api/events"),
   event: (id) => request(`/api/events/${id}`),
+  eventAssignees: (id) => request(`/api/events/${id}/assignees`),
   evidenceUrl: (id) => apiUrl(`/api/media/evidence/${id}`),
   eventVideoUrl: (id) => apiUrl(`/api/media/events/${id}/video`),
   runs: () => request("/api/analysis-runs"),
@@ -38,22 +39,21 @@ export const api = {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ default_analysis_mode: defaultAnalysisMode })
   }),
-  createRun: (videoId, notificationsEnabled, analysisMode, ruleCode = "E1") =>
+  createRun: (videoId, notificationsEnabled, analysisMode) =>
     request("/api/analysis-runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         video_id: videoId,
         notifications_enabled: notificationsEnabled,
-        analysis_mode: analysisMode,
-        rule_code: ruleCode
+        analysis_mode: analysisMode
       })
     }),
-  eventAction: (id, action, note) =>
+  eventAction: (id, action, note, assigneeId) =>
     request(`/api/events/${id}/actions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action, note })
+      body: JSON.stringify({ action, note, assignee_id: assigneeId })
     }),
   uploadVideo: ({ file, cameraId, onProgress }) =>
     new Promise((resolve, reject) => {

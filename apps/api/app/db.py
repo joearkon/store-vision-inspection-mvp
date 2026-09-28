@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS inspection_events (
   recovered_offset REAL,
   max_confidence REAL NOT NULL,
   due_at TEXT,
+  assignee_id TEXT REFERENCES users(id),
   acknowledged_at TEXT,
   resolved_at TEXT,
   created_at TEXT NOT NULL,
@@ -241,6 +242,9 @@ class Database:
         for name, definition in additions.items():
             if name not in columns:
                 connection.execute(f"ALTER TABLE analysis_runs ADD COLUMN {name} {definition}")
+        event_columns = {row["name"] for row in connection.execute("PRAGMA table_info(inspection_events)")}
+        if "assignee_id" not in event_columns:
+            connection.execute("ALTER TABLE inspection_events ADD COLUMN assignee_id TEXT REFERENCES users(id)")
 
     def seed(self) -> None:
         now = utc_now()
