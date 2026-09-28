@@ -15,6 +15,10 @@ from .rules import A1PPEAggregator, E1EventCandidate, E1FridgeDoorAggregator, E1
 from .vision import DoubaoVisionProvider, VisionProvider
 
 
+class FallbackApprovalRequired(RuntimeError):
+    """Pause a two-stage run before any full-frame fallback can spend tokens."""
+
+
 class AnalysisRunner:
     def __init__(
         self,
@@ -62,8 +66,9 @@ class AnalysisRunner:
                 "UPDATE analysis_runs SET total_frames=?, progress=0.1 WHERE id=?",
                 (len(frames), run_id),
             )
+            approved_fallback = bool(run.get("fallback_approved"))
             if run.get("rule_code", "E1") == "A1":
-                if run.get("analysis_mode") == "two_stage":
+                if run.get("analysis_mode") == "two_stage" and not approved_fallback:
                     candidates, raw_responses = self._analyze_a1_two_stage(
                         run, video_path, frames, duration
                     )
@@ -71,7 +76,7 @@ class AnalysisRunner:
                     candidates, raw_responses = self._analyze_a1_baseline(run, frames)
                 events = [self._store_a1_event(run, candidate) for candidate in candidates]
             else:
-                if run.get("analysis_mode") == "two_stage":
+                if run.get("analysis_mode") == "two_stage" and not approved_fallback:
                     candidates, raw_responses = self._analyze_two_stage(
                         run, video_path, frames, duration
                     )
@@ -83,21 +88,32 @@ class AnalysisRunner:
                 "UPDATE analysis_runs SET stage='aggregating', progress=0.9 WHERE id=?",
                 (run_id,),
             )
-            prompt_tokens = sum(item.get("usage", {}).get("prompt_tokens", 0) for item in raw_responses)
-            completion_tokens = sum(item.get("usage", {}).get("completion_tokens", 0) for item in raw_responses)
             self.database.execute(
                 """
                 UPDATE analysis_runs
                 SET status='completed', stage='completed', progress=1, completed_at=?,
-                    prompt_tokens=?, completion_tokens=?, request_count=?
+                    error_code=NULL, error_message=NULL
                 WHERE id=?
                 """,
-                (utc_now(), prompt_tokens, completion_tokens, len(raw_responses), run_id),
+                (utc_now(), run_id),
             )
             if run["notifications_enabled"] and run.get("rule_code", "E1") == "E1":
                 notifier = FeishuNotifier(self.settings, self.database)
                 for event in events:
                     notifier.notify_e1(event)
+        except FallbackApprovalRequired as exc:
+            reason = str(exc)[:1000]
+            self.database.execute(
+                """
+                UPDATE analysis_runs
+                SET status='awaiting_approval', stage='fallback_paused',
+                    error_code='FALLBACK_APPROVAL_REQUIRED', error_message=?,
+                    fallback_reason=?
+                WHERE id=?
+                """,
+                (reason, reason, run_id),
+            )
+            return
         except Exception as exc:
             self.database.execute(
                 """
@@ -263,13 +279,9 @@ class AnalysisRunner:
                 candidates.append(E1EventCandidate(first, confirmed, peak, last_open, recovered))
             return candidates, raw_responses
         except Exception as exc:
-            self.database.execute(
-                "UPDATE analysis_runs SET stage='fallback_analyzing', error_message=? WHERE id=?",
-                (f"双层判定回退逐帧：{str(exc)[:400]}", run["id"]),
-            )
-            self.database.execute("DELETE FROM frame_findings WHERE run_id=?", (run["id"],))
-            candidates, baseline_raws = self._analyze_baseline(run, frames)
-            return candidates, raw_responses + baseline_raws
+            raise FallbackApprovalRequired(
+                f"双层判定无法继续：{str(exc)[:400]}"
+            ) from exc
 
     def _analyze_a1_baseline(
         self, run: dict[str, Any], frames: list[Path]
@@ -358,13 +370,9 @@ class AnalysisRunner:
                 candidates.extend(segment_candidates)
             return candidates, raw_responses
         except Exception as exc:
-            self.database.execute(
-                "UPDATE analysis_runs SET stage='fallback_analyzing', error_message=? WHERE id=?",
-                (f"双层判定回退逐帧：{str(exc)[:400]}", run["id"]),
-            )
-            self.database.execute("DELETE FROM frame_findings WHERE run_id=?", (run["id"],))
-            candidates, baseline_raws = self._analyze_a1_baseline(run, frames)
-            return candidates, raw_responses + baseline_raws
+            raise FallbackApprovalRequired(
+                f"双层判定无法继续：{str(exc)[:400]}"
+            ) from exc
 
     def _store_a1_event(self, run: dict[str, Any], candidate: Any) -> dict[str, Any]:
         event_id = f"EVT-{datetime.now().strftime('%m%d')}-{uuid.uuid4().hex[:6].upper()}"

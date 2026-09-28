@@ -99,7 +99,70 @@ class TwoStagePPEVisionProvider:
             raw={"usage": {"prompt_tokens": 10, "completion_tokens": 2}},
         )
 
+
+class FailingScreenProvider:
+    def __init__(self) -> None:
+        self.frame_calls = 0
+
+    def inspect_open_segments(self, video_path: Path, camera_name: str, fps: float):
+        raise RuntimeError("粗筛暂不可用")
+
+    def inspect_fridge_door(self, image_path: Path, camera_name: str):
+        self.frame_calls += 1
+        raise AssertionError("没有人工确认时不得自动调用逐帧")
+
 class AnalysisPipelineTests(unittest.TestCase):
+    def test_two_stage_failure_pauses_without_automatic_frame_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings(
+                project_root=root,
+                data_dir=root / "data",
+                database_path=root / "data" / "test.sqlite3",
+                frame_rate=1,
+            )
+            settings.ensure_directories()
+            database = Database(settings.database_path)
+            database.initialize()
+            video_path = settings.data_dir / "videos" / "pause.mp4"
+            subprocess.run(
+                [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "color=c=gray:s=320x180:d=5:r=1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video_path),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            now = utc_now()
+            database.execute(
+                """
+                INSERT INTO video_assets
+                (id, store_id, camera_id, original_name, storage_path, source_kind,
+                 size_bytes, sha256, created_at)
+                VALUES ('VID-PAUSE', 'STORE-JTU', 'CAM-STORAGE-01', 'pause.mp4', ?,
+                        'upload', ?, 'pause-hash', ?)
+                """,
+                (str(video_path), video_path.stat().st_size, now),
+            )
+            database.execute(
+                """
+                INSERT INTO analysis_runs
+                (id, video_id, status, progress, stage, notifications_enabled,
+                 analysis_mode, rule_code, frame_rate, created_at)
+                VALUES ('RUN-PAUSE', 'VID-PAUSE', 'queued', 0, 'queued', 0,
+                        'two_stage', 'E1', 1, ?)
+                """,
+                (now,),
+            )
+            provider = FailingScreenProvider()
+            AnalysisRunner(settings, database, provider).run("RUN-PAUSE")
+            run = database.fetch_one("SELECT * FROM analysis_runs WHERE id='RUN-PAUSE'")
+            self.assertEqual(run["status"], "awaiting_approval")
+            self.assertEqual(run["stage"], "fallback_paused")
+            self.assertEqual(run["error_code"], "FALLBACK_APPROVAL_REQUIRED")
+            self.assertEqual(provider.frame_calls, 0)
+
     def test_two_stage_a1_screens_then_verifies_five_frames(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -246,8 +309,9 @@ class AnalysisPipelineTests(unittest.TestCase):
                 """
                 INSERT INTO analysis_runs
                 (id, video_id, status, progress, stage, notifications_enabled,
-                 frame_rate, created_at)
-                VALUES ('RUN-TEST', 'VID-TEST', 'queued', 0, 'queued', 0, 1, ?)
+                 analysis_mode, rule_code, frame_rate, created_at)
+                VALUES ('RUN-TEST', 'VID-TEST', 'queued', 0, 'queued', 0,
+                        'frame_baseline', 'E1', 1, ?)
                 """,
                 (now,),
             )

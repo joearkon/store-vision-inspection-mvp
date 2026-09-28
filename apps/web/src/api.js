@@ -29,6 +29,9 @@ export const api = {
   eventVideoUrl: (id) => apiUrl(`/api/media/events/${id}/video`),
   runs: () => request("/api/analysis-runs"),
   run: (id) => request(`/api/analysis-runs/${id}`),
+  approveFallback: (id) => request(`/api/analysis-runs/${id}/approve-fallback`, {
+    method: "POST"
+  }),
   rulesConfig: () => request("/api/rules/config"),
   updateRulesConfig: (defaultAnalysisMode) => request("/api/rules/config", {
     method: "PUT",

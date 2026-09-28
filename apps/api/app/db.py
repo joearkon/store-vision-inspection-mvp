@@ -77,8 +77,11 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
   progress REAL NOT NULL DEFAULT 0,
   stage TEXT NOT NULL DEFAULT 'queued',
   notifications_enabled INTEGER NOT NULL DEFAULT 0,
-  analysis_mode TEXT NOT NULL DEFAULT 'frame_baseline',
+  analysis_mode TEXT NOT NULL DEFAULT 'two_stage',
   rule_code TEXT NOT NULL DEFAULT 'E1',
+  fallback_approved INTEGER NOT NULL DEFAULT 0,
+  fallback_approved_at TEXT,
+  fallback_reason TEXT,
   frame_rate REAL NOT NULL DEFAULT 1,
   total_frames INTEGER NOT NULL DEFAULT 0,
   processed_frames INTEGER NOT NULL DEFAULT 0,
@@ -225,8 +228,11 @@ class Database:
     def _migrate(connection: sqlite3.Connection) -> None:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(analysis_runs)")}
         additions = {
-            "analysis_mode": "TEXT NOT NULL DEFAULT 'frame_baseline'",
+            "analysis_mode": "TEXT NOT NULL DEFAULT 'two_stage'",
             "rule_code": "TEXT NOT NULL DEFAULT 'E1'",
+            "fallback_approved": "INTEGER NOT NULL DEFAULT 0",
+            "fallback_approved_at": "TEXT",
+            "fallback_reason": "TEXT",
             "prompt_tokens": "INTEGER NOT NULL DEFAULT 0",
             "completion_tokens": "INTEGER NOT NULL DEFAULT 0",
             "request_count": "INTEGER NOT NULL DEFAULT 0",
@@ -301,8 +307,8 @@ class Database:
                 (
                     "two_stage",
                     "双层判定模式",
-                    "视频低帧率粗筛疑似区间，再按所选规则复核关键时间点；冲突或异常时回退逐帧。",
-                    {"coarse_fps": 0.2, "rule_specific_refinement": True, "fallback": True},
+                    "视频低帧率粗筛疑似区间，再按所选规则复核关键时间点；需要逐帧时暂停并等待人工确认。",
+                    {"coarse_fps": 0.2, "rule_specific_refinement": True, "fallback_requires_approval": True},
                 ),
             )
             for profile_id, name, description, config in profiles:
@@ -321,7 +327,7 @@ class Database:
                     (profile_id, name, description, self.json(config), now, now),
                 )
             connection.execute(
-                "INSERT OR IGNORE INTO system_settings VALUES ('default_analysis_mode', 'frame_baseline', ?)",
+                "INSERT OR IGNORE INTO system_settings VALUES ('default_analysis_mode', 'two_stage', ?)",
                 (now,),
             )
 

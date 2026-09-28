@@ -142,7 +142,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "SELECT value FROM system_settings WHERE key='default_analysis_mode'"
         )
         analysis_mode = payload.analysis_mode or (
-            configured["value"] if configured else "frame_baseline"
+            configured["value"] if configured else "two_stage"
         )
         if not database.fetch_one(
             "SELECT id FROM analysis_profiles WHERE id=? AND enabled=1", (analysis_mode,)
@@ -169,13 +169,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/analysis-runs")
     def list_runs() -> list[dict[str, Any]]:
-        return database.fetch_all(
+        runs = database.fetch_all(
             """
             SELECT ar.*, va.original_name, va.camera_id
             FROM analysis_runs ar JOIN video_assets va ON va.id=ar.video_id
             ORDER BY ar.created_at DESC LIMIT 100
             """
         )
+        for run in runs:
+            run["estimated_fallback_tokens"] = int(run["total_frames"] or 0) * 1800
+        return runs
 
     @app.get("/api/analysis-runs/{run_id}")
     def get_run(run_id: str) -> dict[str, Any]:
@@ -189,7 +192,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if not run:
             raise HTTPException(404, "分析任务不存在")
+        run["estimated_fallback_tokens"] = int(run["total_frames"] or 0) * 1800
         return run
+
+    @app.post("/api/analysis-runs/{run_id}/approve-fallback")
+    def approve_fallback(run_id: str) -> dict[str, Any]:
+        run = database.fetch_one("SELECT * FROM analysis_runs WHERE id=?", (run_id,))
+        if not run:
+            raise HTTPException(404, "分析任务不存在")
+        if run["status"] != "awaiting_approval":
+            raise HTTPException(409, "当前任务不需要确认逐帧回退")
+        database.execute("DELETE FROM frame_findings WHERE run_id=?", (run_id,))
+        database.execute(
+            """
+            UPDATE analysis_runs
+            SET status='queued', stage='queued', progress=.1, processed_frames=0,
+                fallback_approved=1, fallback_approved_at=?,
+                error_code=NULL, error_message=NULL, completed_at=NULL
+            WHERE id=?
+            """,
+            (utc_now(), run_id),
+        )
+        return get_run(run_id)
 
     @app.get("/api/rules/config")
     def get_rule_config() -> dict[str, Any]:
@@ -208,7 +232,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "threshold_seconds": current_settings.e1_open_seconds,
                 "severity": "P1",
             },
-            "default_analysis_mode": configured["value"] if configured else "frame_baseline",
+            "default_analysis_mode": configured["value"] if configured else "two_stage",
             "profiles": profiles,
         }
 

@@ -14,6 +14,7 @@ describe("display utilities", () => {
   it("uses the canonical event labels", () => {
     expect(statusLabel("pending_confirmation")).toBe("待确认");
     expect(statusLabel("rectifying")).toBe("整改中");
+    expect(statusLabel("awaiting_approval")).toBe("等待确认");
   });
 
   it("positions and clamps event markers on a video timeline", () => {

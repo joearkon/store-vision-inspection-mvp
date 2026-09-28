@@ -58,7 +58,7 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(run.status_code, 201)
         self.assertEqual(run.json()["status"], "queued")
-        self.assertEqual(run.json()["analysis_mode"], "frame_baseline")
+        self.assertEqual(run.json()["analysis_mode"], "two_stage")
         self.assertEqual(run.json()["rule_code"], "E1")
 
         ppe_run = self.client.post(
@@ -76,17 +76,17 @@ class ApiTests(unittest.TestCase):
     def test_rule_config_switch_changes_new_run_default(self) -> None:
         config = self.client.get("/api/rules/config")
         self.assertEqual(config.status_code, 200)
-        self.assertEqual(config.json()["default_analysis_mode"], "frame_baseline")
+        self.assertEqual(config.json()["default_analysis_mode"], "two_stage")
         self.assertEqual(
             {profile["id"] for profile in config.json()["profiles"]},
             {"frame_baseline", "two_stage"},
         )
 
         updated = self.client.put(
-            "/api/rules/config", json={"default_analysis_mode": "two_stage"}
+            "/api/rules/config", json={"default_analysis_mode": "frame_baseline"}
         )
         self.assertEqual(updated.status_code, 200)
-        self.assertEqual(updated.json()["default_analysis_mode"], "two_stage")
+        self.assertEqual(updated.json()["default_analysis_mode"], "frame_baseline")
 
         video = self.client.post(
             "/api/videos?filename=compare.mp4&camera_id=CAM-STORAGE-01",
@@ -97,17 +97,52 @@ class ApiTests(unittest.TestCase):
             "/api/analysis-runs",
             json={"video_id": video["id"], "notifications_enabled": False},
         )
-        self.assertEqual(run.json()["analysis_mode"], "two_stage")
+        self.assertEqual(run.json()["analysis_mode"], "frame_baseline")
 
         explicit = self.client.post(
             "/api/analysis-runs",
             json={
                 "video_id": video["id"],
                 "notifications_enabled": False,
-                "analysis_mode": "frame_baseline",
+                "analysis_mode": "two_stage",
             },
         )
-        self.assertEqual(explicit.json()["analysis_mode"], "frame_baseline")
+        self.assertEqual(explicit.json()["analysis_mode"], "two_stage")
+
+    def test_fallback_requires_explicit_approval_before_requeue(self) -> None:
+        video = self.client.post(
+            "/api/videos?filename=fallback.mp4&camera_id=CAM-STORAGE-01",
+            content=b"video",
+            headers={"content-type": "video/mp4"},
+        ).json()
+        run = self.client.post(
+            "/api/analysis-runs",
+            json={"video_id": video["id"], "analysis_mode": "two_stage"},
+        ).json()
+        self.client.app.state.database.execute(
+            """
+            UPDATE analysis_runs
+            SET status='awaiting_approval', stage='fallback_paused', total_frames=50,
+                fallback_reason='粗筛画面质量不足'
+            WHERE id=?
+            """,
+            (run["id"],),
+        )
+        paused = self.client.get(f"/api/analysis-runs/{run['id']}").json()
+        self.assertEqual(paused["estimated_fallback_tokens"], 90000)
+
+        approved = self.client.post(
+            f"/api/analysis-runs/{run['id']}/approve-fallback"
+        )
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(approved.json()["status"], "queued")
+        self.assertEqual(approved.json()["analysis_mode"], "two_stage")
+        self.assertEqual(approved.json()["fallback_approved"], 1)
+
+        duplicate = self.client.post(
+            f"/api/analysis-runs/{run['id']}/approve-fallback"
+        )
+        self.assertEqual(duplicate.status_code, 409)
 
     def test_missing_event_returns_404(self) -> None:
         self.assertEqual(self.client.get("/api/events/missing").status_code, 404)

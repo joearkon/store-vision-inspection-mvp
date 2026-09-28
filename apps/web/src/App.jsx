@@ -188,7 +188,7 @@ function UploadPage({ bootstrap, navigate }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [profiles, setProfiles] = useState([]);
-  const [analysisMode, setAnalysisMode] = useState("frame_baseline");
+  const [analysisMode, setAnalysisMode] = useState("two_stage");
   const [ruleCode, setRuleCode] = useState("E1");
 
   useEffect(() => {
@@ -199,7 +199,7 @@ function UploadPage({ bootstrap, navigate }) {
   }, []);
 
   useEffect(() => {
-    if (!run || ["completed", "failed"].includes(run.status)) return;
+    if (!run || ["completed", "failed", "awaiting_approval"].includes(run.status)) return;
     const timer = setInterval(() => api.run(run.id).then(setRun).catch(() => {}), 1500);
     return () => clearInterval(timer);
   }, [run?.id, run?.status]);
@@ -214,6 +214,13 @@ function UploadPage({ bootstrap, navigate }) {
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
   };
+  const approveFallback = async () => {
+    if (!run) return;
+    setBusy(true); setError("");
+    try { setRun(await api.approveFallback(run.id)); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  };
 
   const stages = run?.analysis_mode === "two_stage"
     ? ["queued", "probing", "extracting", "screening", "refining", "aggregating", "completed"]
@@ -221,8 +228,8 @@ function UploadPage({ bootstrap, navigate }) {
   const stepLabels = run?.analysis_mode === "two_stage"
     ? ["任务排队", "读取视频", "FFmpeg 抽帧", "视频低帧率粗筛", "关键时间点复核", "后端规则聚合", "分析完成"]
     : ["任务排队", "读取视频", "FFmpeg 抽帧", "豆包逐帧分析", "多帧事件聚合", "分析完成"];
-  const currentIndex = run?.stage === "fallback_analyzing"
-    ? 4
+  const currentIndex = run?.stage === "fallback_paused"
+    ? 3
     : run ? stages.indexOf(run.stage) : -1;
   return <div className="upload-layout">
     <section className="surface upload-card">
@@ -241,7 +248,7 @@ function UploadPage({ bootstrap, navigate }) {
         <button type="button" className={ruleCode === "A1" ? "selected" : ""} onClick={() => { setRuleCode("A1"); setNotifications(false); }}><div><strong>A1 口罩/手套合规</strong><span>实验规则 · 最近 5 个有效帧命中 3 帧</span></div><i /></button>
       </div></div>
       <div className="form-block"><label>本次分析模式</label><div className="mode-options">
-        {profiles.map((profile) => <button type="button" className={analysisMode === profile.id ? "selected" : ""} onClick={() => setAnalysisMode(profile.id)} key={profile.id}><div><strong>{profile.name}</strong><span>{profile.id === "frame_baseline" ? "全量 1 fps · 准确性基线" : "低帧率粗筛 · 关键点复核 · 自动回退"}</span></div><i /></button>)}
+        {profiles.map((profile) => <button type="button" className={analysisMode === profile.id ? "selected" : ""} onClick={() => setAnalysisMode(profile.id)} key={profile.id}><div><strong>{profile.name}</strong><span>{profile.id === "frame_baseline" ? "全量 1 fps · 高消耗准确性基线" : "低帧率粗筛 · 关键点复核 · 回退前需确认"}</span></div><i /></button>)}
       </div></div>
       <label className={`switch-row ${ruleCode === "A1" ? "disabled" : ""}`}><div><strong>分析完成后发送飞书告警</strong><span>{ruleCode === "A1" ? "实验规则只进入 Dashboard，不发送真实告警" : "演示视频默认关闭，避免循环告警"}</span></div><input type="checkbox" disabled={ruleCode === "A1"} checked={notifications} onChange={(e) => setNotifications(e.target.checked)} /><i /></label>
       {error && <div className="inline-error"><Icon name="alert" />{error}</div>}
@@ -253,6 +260,7 @@ function UploadPage({ bootstrap, navigate }) {
       <div className="steps">
         {stepLabels.map((label, index) => <div className={index < currentIndex ? "done" : index === currentIndex ? "active" : ""} key={label}><i>{index < currentIndex ? <Icon name="check" size={13} /> : index + 1}</i><span>{label}</span></div>)}
       </div>
+      {run?.status === "awaiting_approval" && <div className="fallback-approval"><strong>逐帧回退已暂停</strong><p>{run.fallback_reason || run.error_message}</p><span>预计继续消耗约 {(run.estimated_fallback_tokens || 0).toLocaleString()} Token</span><button className="button secondary" disabled={busy} onClick={approveFallback}>{busy ? "正在提交…" : "确认改用逐帧分析"}</button></div>}
       {run?.status === "completed" && <button className="button primary" onClick={() => navigate("dashboard")}>查看分析结果</button>}
       {run?.status === "failed" && <button className="button secondary" onClick={() => setRun(null)}>重新提交</button>}
     </aside>
