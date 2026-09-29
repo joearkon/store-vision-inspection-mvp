@@ -111,7 +111,140 @@ class FailingScreenProvider:
         self.frame_calls += 1
         raise AssertionError("没有人工确认时不得自动调用逐帧")
 
+
+class ExperimentalVisionProvider:
+    def __init__(self, state: str, segment_end: int | None = None, duplicate: bool = False):
+        self.state = state
+        self.segment_end = segment_end
+        self.duplicate = duplicate
+        self.frame_calls = 0
+
+    def inspect_rule_segments(self, rule_code, video_path, camera_name, fps, roi):
+        end = self.segment_end if self.segment_end is not None else (4 if rule_code == "B1" else 49)
+        segments = [VideoOpenSegment(0, end, .95, "疑似区间")]
+        if self.duplicate:
+            segments.append(VideoOpenSegment(1, end, .94, "重叠区间"))
+        return VideoScreening("usable", segments,
+                              {"usage": {"prompt_tokens": 80, "completion_tokens": 10}})
+
+    def inspect_rule_frame(self, rule_code, image_path, camera_name, roi):
+        self.frame_calls += 1
+        return VisionObservation("usable", self.state, .95, "测试观察", [0, 0, 1, 1],
+                                 {"usage": {"prompt_tokens": 10, "completion_tokens": 2}})
+
+
+class TailRecoveryVisionProvider:
+    def inspect_open_segments(self, video_path, camera_name, fps):
+        return VideoScreening("usable", [VideoOpenSegment(0, 40, .95, "门持续打开")],
+                              {"usage": {"prompt_tokens": 80, "completion_tokens": 10}})
+
+    def inspect_fridge_door(self, image_path, camera_name):
+        index = int(image_path.stem.split("_")[-1]) - 1
+        state = "closed" if index >= 45 else "open"
+        return VisionObservation("usable", state, .95, "门状态", [0, 0, 1, 1],
+                                 {"usage": {"prompt_tokens": 10, "completion_tokens": 2}})
+
 class AnalysisPipelineTests(unittest.TestCase):
+    def _run_video(self, root: Path, rule: str, camera: str, seconds: int, provider):
+        settings = Settings(project_root=root, data_dir=root / "data",
+                            database_path=root / "data" / "test.sqlite3", frame_rate=1)
+        settings.ensure_directories()
+        database = Database(settings.database_path)
+        database.initialize()
+        video_path = settings.data_dir / "videos" / "scenario.mp4"
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+            f"color=c=gray:s=320x180:d={seconds}:r=1", "-c:v", "libx264",
+            "-pix_fmt", "yuv420p", str(video_path),
+        ], check=True, capture_output=True)
+        now = utc_now()
+        database.execute(
+            """INSERT INTO video_assets
+               (id, store_id, camera_id, original_name, storage_path, source_kind,
+                size_bytes, sha256, created_at)
+               VALUES ('VID-SCENARIO', 'STORE-JTU', ?, 'scenario.mp4', ?, 'upload', ?, 'hash', ?)""",
+            (camera, str(video_path), video_path.stat().st_size, now),
+        )
+        database.execute(
+            """INSERT INTO analysis_runs
+               (id, video_id, status, progress, stage, notifications_enabled,
+                analysis_mode, rule_code, frame_rate, created_at)
+               VALUES ('RUN-SCENARIO', 'VID-SCENARIO', 'queued', 0, 'queued', 0,
+                'two_stage', ?, 1, ?)""", (rule, now),
+        )
+        AnalysisRunner(settings, database, provider).run("RUN-SCENARIO")
+        return database
+
+    def test_b1_two_stage_smoke_and_steam_are_separated_without_alert(self) -> None:
+        for state, expected in (("smoke", 1), ("steam", 0)):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temp_dir:
+                database = self._run_video(Path(temp_dir), "B1", "CAM-BACK-01", 5,
+                                           ExperimentalVisionProvider(state, duplicate=True))
+                events = database.fetch_all("SELECT * FROM inspection_events")
+                self.assertEqual(len(events), expected)
+                if events:
+                    self.assertEqual(events[0]["severity"], "P2")
+                    self.assertEqual(events[0]["confirmed_offset"], 2)
+                self.assertEqual(database.fetch_all("SELECT * FROM notification_deliveries"), [])
+
+    def test_g1_short_departed_and_occupied_clips_never_claim_timeout(self) -> None:
+        for state in ("departed_residual", "occupied"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temp_dir:
+                database = self._run_video(Path(temp_dir), "G1", "CAM-DINING-01", 50,
+                                           ExperimentalVisionProvider(state))
+                run = database.fetch_one("SELECT * FROM analysis_runs WHERE id='RUN-SCENARIO'")
+                self.assertEqual(run["status"], "completed")
+                self.assertGreater(run["request_count"], 1)
+                self.assertEqual(database.fetch_all("SELECT * FROM inspection_events"), [])
+
+    def test_g1_long_departed_sample_creates_one_experimental_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = self._run_video(Path(temp_dir), "G1", "CAM-DINING-01", 125,
+                                       ExperimentalVisionProvider("departed_residual", segment_end=124))
+            events = database.fetch_all("SELECT * FROM inspection_events")
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["confirmed_offset"], 120)
+            self.assertEqual(events[0]["severity"], "P2")
+            self.assertEqual(database.fetch_all("SELECT * FROM notification_deliveries"), [])
+
+    def test_operation_rules_confirm_three_of_five_without_notifications(self) -> None:
+        for rule, camera in (("A2", "CAM-FRONT-01"), ("C1", "CAM-BACK-01"),
+                             ("A4", "CAM-FRONT-01")):
+            with self.subTest(rule=rule), tempfile.TemporaryDirectory() as temp_dir:
+                database = self._run_video(Path(temp_dir), rule, camera, 5,
+                                           ExperimentalVisionProvider("violation", segment_end=4))
+                events = database.fetch_all("SELECT * FROM inspection_events")
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["rule_code"], rule)
+                self.assertEqual(events[0]["confirmed_offset"], 4)
+                self.assertEqual(events[0]["severity"], "P1")
+                self.assertEqual(database.fetch_all("SELECT * FROM notification_deliveries"), [])
+
+    def test_operation_unknown_or_compliant_does_not_create_event(self) -> None:
+        for rule, state in (("A2", "unknown"), ("C1", "compliant"), ("A4", "unknown")):
+            with self.subTest(rule=rule), tempfile.TemporaryDirectory() as temp_dir:
+                database = self._run_video(Path(temp_dir), rule, "CAM-FRONT-01", 5,
+                                           ExperimentalVisionProvider(state, segment_end=4))
+                self.assertEqual(database.fetch_all("SELECT * FROM inspection_events"), [])
+
+    def test_a3_requires_sixty_seconds_of_observed_mess(self) -> None:
+        for seconds, end, expected in ((50, 49, 0), (61, 60, 1)):
+            with self.subTest(seconds=seconds), tempfile.TemporaryDirectory() as temp_dir:
+                database = self._run_video(Path(temp_dir), "A3", "CAM-BACK-01", seconds,
+                                           ExperimentalVisionProvider("messy", segment_end=end))
+                events = database.fetch_all("SELECT * FROM inspection_events")
+                self.assertEqual(len(events), expected)
+                if events:
+                    self.assertEqual(events[0]["confirmed_offset"], 60)
+
+    def test_e1_two_stage_checks_video_tail_for_late_closure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = self._run_video(Path(temp_dir), "E1", "CAM-STORAGE-01", 50,
+                                       TailRecoveryVisionProvider())
+            event = database.fetch_one("SELECT * FROM inspection_events")
+            self.assertEqual(event["confirmed_offset"], 30)
+            self.assertEqual(event["recovered_offset"], 49)
+
     def test_two_stage_failure_pauses_without_automatic_frame_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

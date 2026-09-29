@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
@@ -31,15 +33,76 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/health").json(), {"status": "ok"})
         payload = self.client.get("/api/bootstrap").json()
         self.assertEqual(payload["store"]["name"], "MOMOYO JTU")
-        self.assertEqual(len(payload["cameras"]), 4)
+        self.assertEqual(len(payload["cameras"]), 5)
         self.assertEqual(
             {camera["name"] for camera in payload["cameras"]},
-            {"前台-01", "后厨-01", "仓储-01", "取餐-01"},
+            {"前台-01", "后厨-01", "仓储-01", "取餐-01", "用餐区-01"},
         )
         self.assertEqual(
             sum(camera["status"] == "online" for camera in payload["cameras"]),
-            3,
+            4,
         )
+
+    def test_camera_configuration_and_uploaded_bytes(self) -> None:
+        created = self.client.post("/api/cameras", json={
+            "name": "仓储-02", "code": "STORAGE-02", "area_type": "storage"
+        })
+        self.assertEqual(created.status_code, 201)
+        camera_id = created.json()["id"]
+        self.assertEqual(created.json()["status"], "offline")
+        self.assertEqual(self.client.post("/api/cameras", json={
+            "name": "重复", "code": "STORAGE-02", "area_type": "storage"
+        }).status_code, 409)
+        self.assertEqual(self.client.patch(f"/api/cameras/{camera_id}", json={"status": "online"}).status_code, 200)
+        self.assertEqual(self.client.post(
+            "/api/videos?filename=disabled.mp4&camera_id=CAM-PICKUP-01",
+            content=b"video", headers={"content-type": "video/mp4"},
+        ).status_code, 409)
+        self.client.app.state.database.initialize()
+        cameras = self.client.get("/api/bootstrap").json()["cameras"]
+        self.assertEqual(next(item for item in cameras if item["id"] == camera_id)["status"], "online")
+        self.assertEqual(self.client.patch("/api/cameras/missing", json={"status": "offline"}).status_code, 404)
+        video = self.client.post(
+            "/api/videos?filename=volume.mp4&camera_id=CAM-FRONT-01",
+            content=b"video", headers={"content-type": "video/mp4"},
+        )
+        self.assertEqual(video.status_code, 201)
+        self.assertEqual(self.client.get("/api/bootstrap").json()["today_upload_bytes"], 5)
+
+    def test_camera_detail_filters_source_and_local_date(self) -> None:
+        video = self.client.post(
+            "/api/videos?filename=detail.mp4&camera_id=CAM-STORAGE-01",
+            content=b"video", headers={"content-type": "video/mp4"},
+        ).json()
+        run = self.client.post("/api/analysis-runs", json={"video_id": video["id"]}).json()
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        samples = [
+            ("TODAY", "CAM-STORAGE-01", "pending_confirmation", today),
+            ("OLD", "CAM-STORAGE-01", "resolved", today - timedelta(days=2)),
+            ("FALSE", "CAM-STORAGE-01", "false_positive", today),
+            ("OTHER", "CAM-FRONT-01", "pending_confirmation", today),
+        ]
+        for suffix, camera_id, status, date in samples:
+            created = datetime.combine(date, time(12, 0), ZoneInfo("Asia/Shanghai")).isoformat()
+            self.client.app.state.database.execute(
+                """INSERT INTO inspection_events
+                   (id, run_id, store_id, camera_id, rule_code, title, severity, status,
+                    first_seen_offset, confirmed_offset, last_seen_offset, max_confidence,
+                    created_at, updated_at)
+                   VALUES (?, ?, 'STORE-JTU', ?, 'E1', '冰箱门持续开启', 'P1',
+                           ?, 0, 30, 40, .95, ?, ?)""",
+                (f"EVT-DETAIL-{suffix}", run["id"], camera_id, status, created, created),
+            )
+        detail = self.client.get("/api/cameras/CAM-STORAGE-01/detail").json()
+        self.assertEqual(detail["camera"]["name"], "仓储-01")
+        self.assertEqual(detail["counts"], {"total": 1, "p0": 0, "p1": 1, "p2": 0})
+        self.assertEqual({event["id"] for event in detail["events"]},
+                         {"EVT-DETAIL-TODAY", "EVT-DETAIL-FALSE"})
+        week = self.client.get("/api/cameras/CAM-STORAGE-01/detail?days=7").json()
+        self.assertEqual(week["counts"]["total"], 2)
+        self.assertEqual(len(week["events"]), 3)
+        self.assertEqual(self.client.get("/api/cameras/CAM-STORAGE-01/detail?days=3").status_code, 422)
+        self.assertEqual(self.client.get("/api/cameras/missing/detail").status_code, 404)
 
     def test_dashboard_counts_all_pending_and_only_today_events(self) -> None:
         video = self.client.post(
@@ -62,7 +125,42 @@ class ApiTests(unittest.TestCase):
         result = self.client.get("/api/dashboard").json()
         self.assertEqual(result["metrics"]["today_events"], 1)
         self.assertEqual(result["metrics"]["pending_events"], 9)
+        self.assertEqual(result["metrics"]["online_cameras"], 4)
+        self.assertEqual(result["metrics"]["total_cameras"], 5)
+        self.assertEqual(len(result["camera_sources"]), 5)
         self.assertEqual(len(result["recent_events"]), 8)
+        listed = next(item for item in self.client.get("/api/analysis-runs").json() if item["id"] == run["id"])
+        self.assertEqual(listed["event_count"], 10)
+        self.assertIn("duration_seconds", listed)
+        detail = self.client.get(f"/api/analysis-runs/{run['id']}").json()
+        self.assertEqual(detail["event_count"], 10)
+        self.assertEqual(len(detail["events"]), 10)
+
+    def test_dashboard_today_uses_store_timezone_and_excludes_false_positives(self) -> None:
+        video = self.client.post(
+            "/api/videos?filename=timezone.mp4&camera_id=CAM-STORAGE-01",
+            content=b"video", headers={"content-type": "video/mp4"},
+        ).json()
+        run = self.client.post("/api/analysis-runs", json={"video_id": video["id"]}).json()
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        samples = [
+            ("TODAY", "pending_confirmation", datetime.combine(today, time(0, 30), ZoneInfo("Asia/Shanghai"))),
+            ("YESTERDAY", "pending_confirmation", datetime.combine(today - timedelta(days=1), time(23, 30), ZoneInfo("Asia/Shanghai"))),
+            ("REJECTED", "false_positive", datetime.combine(today, time(12, 0), ZoneInfo("Asia/Shanghai"))),
+        ]
+        for suffix, status, created in samples:
+            self.client.app.state.database.execute(
+                """INSERT INTO inspection_events
+                   (id, run_id, store_id, camera_id, rule_code, title, severity, status,
+                    first_seen_offset, confirmed_offset, last_seen_offset, max_confidence,
+                    created_at, updated_at)
+                   VALUES (?, ?, 'STORE-JTU', 'CAM-STORAGE-01', 'E1',
+                           '冰箱门持续开启', 'P1', ?, 0, 30, 40, .95, ?, ?)""",
+                (f"EVT-TZ-{suffix}", run["id"], status, created.isoformat(), created.isoformat()),
+            )
+        result = self.client.get("/api/dashboard").json()
+        self.assertEqual(result["metrics"]["today_events"], 1)
+        self.assertEqual(result["metrics"]["pending_events"], 2)
 
     def test_upload_rejects_non_mp4(self) -> None:
         response = self.client.post("/api/videos?filename=test.txt", content=b"test")
@@ -83,6 +181,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(run.json()["status"], "queued")
         self.assertEqual(run.json()["analysis_mode"], "two_stage")
         self.assertEqual(run.json()["rule_code"], "E1")
+        zero_event_detail = self.client.get(f"/api/analysis-runs/{run.json()['id']}").json()
+        self.assertEqual(zero_event_detail["event_count"], 0)
+        self.assertEqual(zero_event_detail["events"], [])
 
         ppe_run = self.client.post(
             "/api/analysis-runs",
@@ -93,8 +194,7 @@ class ApiTests(unittest.TestCase):
                 "rule_code": "A1",
             },
         )
-        self.assertEqual(ppe_run.status_code, 201)
-        self.assertEqual(ppe_run.json()["rule_code"], "A1")
+        self.assertEqual(ppe_run.status_code, 400)
 
     def test_camera_area_selects_rule_when_user_does_not_choose_one(self) -> None:
         front_video = self.client.post(
@@ -112,8 +212,32 @@ class ApiTests(unittest.TestCase):
             "/api/videos?filename=back.mp4&camera_id=CAM-BACK-01",
             content=b"back", headers={"content-type": "video/mp4"},
         ).json()
-        unsupported = self.client.post("/api/analysis-runs", json={"video_id": back_video["id"]})
-        self.assertEqual(unsupported.status_code, 400)
+        back_run = self.client.post("/api/analysis-runs", json={
+            "video_id": back_video["id"], "notifications_enabled": True,
+        })
+        self.assertEqual(back_run.status_code, 201)
+        self.assertEqual(back_run.json()["rule_code"], "B1")
+        self.assertEqual(back_run.json()["notifications_enabled"], 0)
+        for rule_code, video_id in (("A2", front_video["id"]), ("C1", back_video["id"]),
+                                    ("A3", back_video["id"]), ("A4", front_video["id"])):
+            trial = self.client.post("/api/analysis-runs", json={
+                "video_id": video_id, "rule_code": rule_code, "notifications_enabled": True,
+            })
+            self.assertEqual(trial.status_code, 201)
+            self.assertEqual(trial.json()["rule_code"], rule_code)
+            self.assertEqual(trial.json()["notifications_enabled"], 0)
+        dining_video = self.client.post(
+            "/api/videos?filename=dining.mp4&camera_id=CAM-DINING-01",
+            content=b"dining", headers={"content-type": "video/mp4"},
+        ).json()
+        dining_run = self.client.post("/api/analysis-runs", json={
+            "video_id": dining_video["id"], "notifications_enabled": True,
+        })
+        self.assertEqual(dining_run.status_code, 400)
+        mismatched = self.client.post("/api/analysis-runs", json={
+            "video_id": dining_video["id"], "rule_code": "B1",
+        })
+        self.assertEqual(mismatched.status_code, 400)
 
     def test_rectification_assignment_and_closure_are_audited(self) -> None:
         video = self.client.post(

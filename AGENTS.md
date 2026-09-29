@@ -8,7 +8,7 @@ Before changing product behavior or UI, read:
 
 1. `docs/MVP-SCENARIOS-TECHNICAL-DESIGN.md`
 2. `docs/VISUAL-IMPLEMENTATION-CONTRACT.md`
-3. `prototypes/visual-baseline-v1/README.md`
+3. `prototypes/visual-baseline-v1.2/README.md`
 
 The prototype is the visual baseline. Business state and technical truth come from the MVP design document.
 

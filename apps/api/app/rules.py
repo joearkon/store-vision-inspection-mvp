@@ -147,3 +147,49 @@ class A1PPEAggregator:
 
         finish(None)
         return events
+
+
+class TimedObservationAggregator:
+    """Confirm a visible state using observed video timestamps, never wall-clock time.
+
+    Unknown and contradictory observations break a candidate. Sparse two-stage
+    observations must be validated against a video-screened interval by the caller.
+    """
+
+    def __init__(self, state: str | set[str], threshold_seconds: float,
+                 max_gap_seconds: float = 2.5, min_confidence: float = 0.7):
+        self.states = {state} if isinstance(state, str) else state
+        self.threshold_seconds = threshold_seconds
+        self.max_gap_seconds = max_gap_seconds
+        self.min_confidence = min_confidence
+
+    def aggregate(self, observations: list[E1Observation]) -> list[E1EventCandidate]:
+        ordered = sorted(observations, key=lambda item: item.offset_seconds)
+        events: list[E1EventCandidate] = []
+        hits: list[E1Observation] = []
+        confirmed: E1Observation | None = None
+        previous: E1Observation | None = None
+
+        def finish(recovered: E1Observation | None) -> None:
+            nonlocal hits, confirmed
+            if confirmed is not None and hits:
+                events.append(E1EventCandidate(
+                    first=hits[0], confirmed=confirmed,
+                    peak=max(hits, key=lambda item: item.confidence),
+                    last_open=hits[-1], recovered=recovered,
+                ))
+            hits = []
+            confirmed = None
+
+        for item in ordered:
+            if previous and item.offset_seconds - previous.offset_seconds > self.max_gap_seconds:
+                finish(None)
+            previous = item
+            if item.state in self.states and item.confidence >= self.min_confidence:
+                hits.append(item)
+                if confirmed is None and item.offset_seconds - hits[0].offset_seconds >= self.threshold_seconds:
+                    confirmed = item
+            else:
+                finish(item if item.state not in self.states | {"unknown", "uncertain"} else None)
+        finish(None)
+        return events

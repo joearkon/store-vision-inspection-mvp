@@ -42,12 +42,12 @@ export function StoreOverviewPage({ bootstrap, navigate }) {
   const overdue = pending.filter((event) => event.overdue).length;
   const health = storeHealth(events);
   return <div className="portfolio-page">
-    <div className="portfolio-intro"><div><h2>门店总览</h2><p>当前仅初始化 {store?.name || "1 家门店"}；所有数值来自实际接入数据。</p></div><button className="button secondary" onClick={reload}>刷新数据</button></div>
+    <div className="portfolio-intro"><div><h2>门店总览</h2><p>当前仅初始化 {store?.name || "1 家门店"}；事件来自分析任务，视频源为演示配置。</p></div><button className="button secondary" onClick={reload}>刷新数据</button></div>
     <div className="portfolio-stats">
       <CountCard label="门店总数" value="1" sub="已初始化门店" icon="store" />
-      <CountCard label="今日异常总数" value={metrics.today_events} sub="已确认分析事件" tone="danger" icon="alert" />
+      <CountCard label="今日异常总数" value={metrics.today_events} sub="今日生成且未判误报" tone="danger" icon="alert" />
       <CountCard label="待处理事件" value={metrics.pending_events} sub={`${overdue} 个已超时`} icon="clock" />
-      <CountCard label="在线摄像头" value={`${metrics.online_cameras}/${metrics.total_cameras}`} sub="虚拟视频源状态" tone="green" icon="camera" />
+      <CountCard label="可用视频源" value={`${metrics.online_cameras}/${metrics.total_cameras}`} sub="虚拟来源，非实时连接" tone="green" icon="camera" />
       <CountCard label="SLA 达标率" value="—" sub="口径未定，暂不计算" tone="purple" icon="check" />
     </div>
     <div className="portfolio-columns"><div className="portfolio-left">

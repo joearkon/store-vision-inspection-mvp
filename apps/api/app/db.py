@@ -286,20 +286,22 @@ class Database:
                 ("CAM-BACK-01", "BACK-01", "后厨-01", "back_kitchen", "online"),
                 ("CAM-STORAGE-01", "STORAGE-01", "仓储-01", "storage", "online"),
                 ("CAM-PICKUP-01", "PICKUP-01", "取餐-01", "pickup_area", "offline"),
+                ("CAM-DINING-01", "DINING-01", "用餐区-01", "dining_area", "online"),
             )
             for camera_id, code, name, area_type, status in cameras:
+                # One-table synthetic-test camera only; production cameras need calibrated per-table ROIs.
+                roi = self.json({"id": "TABLE-TEST-01", "name": "单桌测试区（整画面）", "bbox": [0, 0, 1, 1]}) if area_type == "dining_area" else None
                 connection.execute(
                     """
                     INSERT INTO camera_sources
                     (id, store_id, code, name, area_type, source_type, status, roi_json, created_at)
-                    VALUES (?, 'STORE-JTU', ?, ?, ?, 'virtual', ?, NULL, ?)
+                    VALUES (?, 'STORE-JTU', ?, ?, ?, 'virtual', ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                       code=excluded.code,
                       name=excluded.name,
-                      area_type=excluded.area_type,
-                      status=excluded.status
+                      area_type=excluded.area_type
                     """,
-                    (camera_id, code, name, area_type, status, now),
+                    (camera_id, code, name, area_type, status, roi, now),
                 )
             profiles = (
                 (

@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import uuid
 import math
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from .config import Settings
 from .db import Database, utc_now
 from .media import extract_frames, probe_duration
 from .notifier import FeishuNotifier
-from .rules import A1PPEAggregator, E1EventCandidate, E1FridgeDoorAggregator, E1Observation
+from .rules import A1PPEAggregator, E1EventCandidate, E1FridgeDoorAggregator, E1Observation, TimedObservationAggregator
 from .vision import DoubaoVisionProvider, VisionProvider
 
 
@@ -33,7 +34,8 @@ class AnalysisRunner:
     def run(self, run_id: str) -> None:
         run = self.database.fetch_one(
             """
-            SELECT ar.*, va.storage_path, va.camera_id, va.store_id, cs.name AS camera_name
+            SELECT ar.*, va.storage_path, va.camera_id, va.store_id,
+                   cs.name AS camera_name, cs.roi_json
             FROM analysis_runs ar
             JOIN video_assets va ON va.id = ar.video_id
             JOIN camera_sources cs ON cs.id = va.camera_id
@@ -67,7 +69,26 @@ class AnalysisRunner:
                 (len(frames), run_id),
             )
             approved_fallback = bool(run.get("fallback_approved"))
-            if run.get("rule_code", "E1") == "A1":
+            if run.get("rule_code") in {"B1", "G1"}:
+                roi = json.loads(run["roi_json"]) if run.get("roi_json") else None
+                if run["rule_code"] == "G1" and not roi:
+                    raise ValueError("G1 缺少逐桌 ROI，不允许分析")
+                if run.get("analysis_mode") == "two_stage" and not approved_fallback:
+                    candidates, raw_responses = self._analyze_experimental_two_stage(
+                        run, video_path, frames, duration, roi
+                    )
+                else:
+                    candidates, raw_responses = self._analyze_experimental_baseline(run, frames, roi)
+                events = [self._store_experimental_event(run, candidate) for candidate in candidates]
+            elif run.get("rule_code") in {"A2", "C1", "A3", "A4"}:
+                if run.get("analysis_mode") == "two_stage" and not approved_fallback:
+                    candidates, raw_responses = self._analyze_operation_two_stage(
+                        run, video_path, frames, duration
+                    )
+                else:
+                    candidates, raw_responses = self._analyze_operation_baseline(run, frames)
+                events = [self._store_operation_event(run, candidate) for candidate in candidates]
+            elif run.get("rule_code", "E1") == "A1":
                 if run.get("analysis_mode") == "two_stage" and not approved_fallback:
                     candidates, raw_responses = self._analyze_a1_two_stage(
                         run, video_path, frames, duration
@@ -245,9 +266,12 @@ class AnalysisRunner:
                     int(math.ceil(confirm + 1)),
                     int(math.floor(end)),
                 }
-                recovery_index = int(math.ceil(end + 1))
-                if recovery_index < len(frames):
-                    targets.add(recovery_index)
+                # The coarse segment may end before the actual closure. Bound tail
+                # verification to three extra frames, including the video tail.
+                recovery_targets = {
+                    int(math.ceil(end + 1)), int(math.ceil(end + 3)), len(frames) - 1
+                }
+                targets.update(index for index in recovery_targets if index > end and index < len(frames))
                 targets = {index for index in targets if 0 <= index < len(frames)}
                 observations: dict[int, E1Observation] = {}
                 for index in sorted(targets):
@@ -273,9 +297,11 @@ class AnalysisRunner:
                 confirmed = confirmed_candidates[0]
                 last_open = observations[max(open_indices)]
                 peak = max((observations[index] for index in open_indices), key=lambda item: item.confidence)
-                recovered = observations.get(recovery_index)
-                if recovered and recovered.state != "closed":
-                    recovered = None
+                recovered = next(
+                    (observations[index] for index in sorted(recovery_targets)
+                     if index in observations and observations[index].state == "closed"),
+                    None,
+                )
                 candidates.append(E1EventCandidate(first, confirmed, peak, last_open, recovered))
             return candidates, raw_responses
         except Exception as exc:
@@ -303,6 +329,228 @@ class AnalysisRunner:
         return A1PPEAggregator(
             max_gap_seconds=max(2.5, 2 / float(run["frame_rate"])),
         ).aggregate(observations), raws
+
+    def _operation_aggregate(self, rule_code: str, observations: list[E1Observation],
+                             max_gap: float) -> list[Any]:
+        if rule_code == "A3":
+            return TimedObservationAggregator("messy", 60, max_gap).aggregate(observations)
+        return A1PPEAggregator(max_gap_seconds=max_gap).aggregate(observations)
+
+    def _analyze_operation_baseline(
+        self, run: dict[str, Any], frames: list[Path]
+    ) -> tuple[list[Any], list[dict[str, Any]]]:
+        self.database.execute("UPDATE analysis_runs SET stage='analyzing' WHERE id=?", (run["id"],))
+        observations: list[E1Observation] = []
+        raws: list[dict[str, Any]] = []
+        for index, frame in enumerate(frames):
+            result = self.provider.inspect_rule_frame(run["rule_code"], frame, run["camera_name"], None)
+            observations.append(self._store_finding(run, frame, index, result, run["rule_code"]))
+            raws.append(result.raw)
+            self.database.execute(
+                "UPDATE analysis_runs SET processed_frames=?, progress=? WHERE id=?",
+                (index + 1, .1 + (index + 1) / max(len(frames), 1) * .75, run["id"]),
+            )
+        return self._operation_aggregate(run["rule_code"], observations, max(2.5, 2 / float(run["frame_rate"]))), raws
+
+    def _analyze_operation_two_stage(
+        self, run: dict[str, Any], video_path: Path, frames: list[Path], duration: float
+    ) -> tuple[list[Any], list[dict[str, Any]]]:
+        raws: list[dict[str, Any]] = []
+        self.database.execute("UPDATE analysis_runs SET stage='screening', progress=.15 WHERE id=?", (run["id"],))
+        try:
+            if video_path.stat().st_size > 25 * 1024 * 1024:
+                raise RuntimeError("视频超过双层粗筛 25 MB 限制")
+            screening = self.provider.inspect_rule_segments(
+                run["rule_code"], video_path, run["camera_name"], .2, None
+            )
+            self._track_usage(run["id"], screening.raw)
+            raws.append(screening.raw)
+            self.database.execute(
+                "UPDATE analysis_runs SET screening_result_json=? WHERE id=?",
+                (self.database.json({"image_quality": screening.image_quality,
+                                     "segments": [segment.__dict__ for segment in screening.segments]}), run["id"]),
+            )
+            if screening.image_quality != "usable":
+                raise RuntimeError("视频粗筛画面质量不足")
+            self.database.execute("UPDATE analysis_runs SET stage='refining', progress=.35 WHERE id=?", (run["id"],))
+            candidates: list[Any] = []
+            for segment in screening.segments:
+                start = max(0, int(math.ceil(segment.start_seconds)))
+                end = min(len(frames) - 1, int(math.floor(segment.end_seconds)))
+                if end < start:
+                    continue
+                if run["rule_code"] == "A3":
+                    if end - start < 60:
+                        continue
+                    targets = list(range(start, end + 1, 10))
+                    if targets[-1] != end:
+                        targets.append(end)
+                    max_gap = 10 / float(run["frame_rate"]) + 1
+                else:
+                    if end - start < 4:
+                        continue
+                    mid = (start + end) // 2
+                    first = max(start, min(mid - 2, end - 4))
+                    targets = list(range(first, first + 5))
+                    max_gap = max(2.5, 2 / float(run["frame_rate"]))
+                observations: list[E1Observation] = []
+                for index in targets:
+                    result = self.provider.inspect_rule_frame(
+                        run["rule_code"], frames[index], run["camera_name"], None
+                    )
+                    observations.append(self._store_finding(run, frames[index], index, result, run["rule_code"]))
+                    raws.append(result.raw)
+                    self.database.execute(
+                        "UPDATE analysis_runs SET processed_frames=?, progress=? WHERE id=?",
+                        (len(raws) - 1, min(.85, .35 + len(raws) * .04), run["id"]),
+                    )
+                candidates.extend(self._operation_aggregate(run["rule_code"], observations, max_gap))
+            return candidates, raws
+        except Exception as exc:
+            raise FallbackApprovalRequired(f"双层判定无法继续：{str(exc)[:400]}") from exc
+
+    def _store_operation_event(self, run: dict[str, Any], candidate: Any) -> dict[str, Any]:
+        titles = {"A2": "疑似未戴工作帽/发网（待人工复核）", "C1": "疑似未穿围裙/工服（待人工复核）",
+                  "A3": "疑似操作台明显脏乱（待人工复核）", "A4": "疑似地面积水/明显垃圾（待人工复核）"}
+        event_id = f"EVT-{datetime.now().strftime('%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+        now = utc_now()
+        recovered = candidate.recovered.offset_seconds if candidate.recovered else None
+        last = getattr(candidate, "last_violation", None) or getattr(candidate, "last_open")
+        self.database.execute(
+            """INSERT INTO inspection_events
+            (id, run_id, store_id, camera_id, rule_code, title, severity, status,
+             first_seen_offset, confirmed_offset, last_seen_offset, recovered_offset,
+             max_confidence, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'P1', 'pending_confirmation', ?, ?, ?, ?, ?, ?, ?)""",
+            (event_id, run["id"], run["store_id"], run["camera_id"], run["rule_code"], titles[run["rule_code"]],
+             candidate.first.offset_seconds, candidate.confirmed.offset_seconds,
+             recovered if recovered is not None else last.offset_seconds, recovered,
+             candidate.peak.confidence, now, now),
+        )
+        evidence = [("start", candidate.first), ("confirmed", candidate.confirmed), ("peak", candidate.peak)]
+        if candidate.recovered:
+            evidence.append(("recovered", candidate.recovered))
+        for kind, observation in evidence:
+            self.database.execute(
+                """INSERT OR IGNORE INTO event_evidence
+                (id, event_id, finding_id, evidence_type, image_path, captured_offset, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (f"EVD-{uuid.uuid4().hex[:12].upper()}", event_id, observation.finding_id,
+                 kind, observation.image_path, observation.offset_seconds, now),
+            )
+        self.database.execute(
+            """INSERT INTO event_action_logs
+            (id, event_id, actor_id, action, from_status, to_status, note, created_at)
+            VALUES (?, ?, NULL, 'system_confirmed', 'observing', 'pending_confirmation', ?, ?)""",
+            (f"LOG-{uuid.uuid4().hex[:12].upper()}", event_id,
+             f"{run['rule_code']} 试运行：模型观察经后端聚合，需人工复核；不发送飞书告警", now),
+        )
+        return self.database.fetch_one("SELECT * FROM inspection_events WHERE id=?", (event_id,)) or {}
+
+    def _experimental_aggregator(self, run: dict[str, Any], max_gap: float) -> TimedObservationAggregator:
+        if run["rule_code"] == "B1":
+            return TimedObservationAggregator({"smoke", "flame"}, 2, max_gap)
+        return TimedObservationAggregator("departed_residual", 120, max_gap)
+
+    def _analyze_experimental_baseline(
+        self, run: dict[str, Any], frames: list[Path], roi: dict[str, Any] | None
+    ) -> tuple[list[E1EventCandidate], list[dict[str, Any]]]:
+        self.database.execute("UPDATE analysis_runs SET stage='analyzing' WHERE id=?", (run["id"],))
+        observations: list[E1Observation] = []
+        raws: list[dict[str, Any]] = []
+        for index, frame_path in enumerate(frames):
+            result = self.provider.inspect_rule_frame(run["rule_code"], frame_path, run["camera_name"], roi)
+            observations.append(self._store_finding(run, frame_path, index, result, run["rule_code"]))
+            raws.append(result.raw)
+            self.database.execute(
+                "UPDATE analysis_runs SET processed_frames=?, progress=? WHERE id=?",
+                (index + 1, 0.1 + (index + 1) / max(len(frames), 1) * 0.75, run["id"]),
+            )
+        return self._experimental_aggregator(run, max(2.5, 2 / float(run["frame_rate"]))).aggregate(observations), raws
+
+    def _analyze_experimental_two_stage(
+        self, run: dict[str, Any], video_path: Path, frames: list[Path],
+        duration: float, roi: dict[str, Any] | None
+    ) -> tuple[list[E1EventCandidate], list[dict[str, Any]]]:
+        raws: list[dict[str, Any]] = []
+        self.database.execute("UPDATE analysis_runs SET stage='screening', progress=.15 WHERE id=?", (run["id"],))
+        try:
+            if video_path.stat().st_size > 25 * 1024 * 1024:
+                raise RuntimeError("视频超过双层粗筛 25 MB 限制")
+            screening = self.provider.inspect_rule_segments(
+                run["rule_code"], video_path, run["camera_name"], .2, roi
+            )
+            self._track_usage(run["id"], screening.raw)
+            raws.append(screening.raw)
+            self.database.execute(
+                "UPDATE analysis_runs SET screening_result_json=? WHERE id=?",
+                (self.database.json({
+                    "image_quality": screening.image_quality,
+                    "segments": [segment.__dict__ for segment in screening.segments],
+                }), run["id"]),
+            )
+            if screening.image_quality != "usable":
+                raise RuntimeError("视频粗筛画面质量不足")
+            self.database.execute("UPDATE analysis_runs SET stage='refining', progress=.35 WHERE id=?", (run["id"],))
+            threshold = 2 if run["rule_code"] == "B1" else 120
+            candidates: list[E1EventCandidate] = []
+            merged_segments: list[list[float]] = []
+            for segment in sorted(screening.segments, key=lambda item: item.start_seconds):
+                if merged_segments and segment.start_seconds <= merged_segments[-1][1] + 2:
+                    merged_segments[-1][1] = max(merged_segments[-1][1], segment.end_seconds)
+                else:
+                    merged_segments.append([segment.start_seconds, segment.end_seconds])
+            for segment_start, segment_end in merged_segments:
+                start = max(0, int(math.ceil(segment_start)))
+                end = min(len(frames) - 1, int(math.floor(segment_end)), int(duration))
+                if end < start:
+                    continue
+                # Even short G1 clips receive visual observations, but never a
+                # confirmed event before the same 120-second business threshold.
+                targets = {start, end, start + (end - start) // 2}
+                if end - start >= threshold:
+                    targets.add(start + threshold)
+                    targets.add(start + threshold // 2)
+                observations: dict[int, E1Observation] = {}
+                for index in sorted(targets):
+                    result = self.provider.inspect_rule_frame(
+                        run["rule_code"], frames[index], run["camera_name"], roi
+                    )
+                    observations[index] = self._store_finding(
+                        run, frames[index], index, result, run["rule_code"]
+                    )
+                    raws.append(result.raw)
+                    self.database.execute(
+                        "UPDATE analysis_runs SET processed_frames=?, progress=? WHERE id=?",
+                        (len(raws) - 1, min(.85, .35 + len(raws) * .04), run["id"]),
+                    )
+                if end - start < threshold:
+                    continue
+                valid_states = {"smoke", "flame"} if run["rule_code"] == "B1" else {"departed_residual"}
+                if any(item.state not in valid_states or item.confidence < .7 for item in observations.values()):
+                    continue
+                ordered = [observations[index] for index in sorted(targets)]
+                confirmed = observations[start + threshold]
+                recovery: E1Observation | None = None
+                for index in sorted({end + 1, min(len(frames) - 1, end + 3), len(frames) - 1}):
+                    if index <= end or index >= len(frames):
+                        continue
+                    result = self.provider.inspect_rule_frame(
+                        run["rule_code"], frames[index], run["camera_name"], roi
+                    )
+                    item = self._store_finding(run, frames[index], index, result, run["rule_code"])
+                    raws.append(result.raw)
+                    if item.state in ({"steam", "clear"} if run["rule_code"] == "B1" else {"occupied", "clean", "cleaning"}):
+                        recovery = item
+                        break
+                candidates.append(E1EventCandidate(
+                    first=observations[start], confirmed=confirmed,
+                    peak=max(ordered, key=lambda item: item.confidence),
+                    last_open=observations[end], recovered=recovery,
+                ))
+            return candidates, raws
+        except Exception as exc:
+            raise FallbackApprovalRequired(f"双层判定无法继续：{str(exc)[:400]}") from exc
 
     def _analyze_a1_two_stage(
         self,
@@ -419,6 +667,51 @@ class AnalysisRunner:
                     '最近5个有效观察中至少3次确认口罩或手套缺失', ?)
             """,
             (f"LOG-{uuid.uuid4().hex[:12].upper()}", event_id, now),
+        )
+        return self.database.fetch_one("SELECT * FROM inspection_events WHERE id=?", (event_id,)) or {}
+
+    def _store_experimental_event(
+        self, run: dict[str, Any], candidate: E1EventCandidate
+    ) -> dict[str, Any]:
+        rule_code = run["rule_code"]
+        title = "疑似异常烟雾或明火（实验待复核）" if rule_code == "B1" else "餐桌离席后残留未清理（实验待复核）"
+        event_id = f"EVT-{datetime.now().strftime('%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+        now = utc_now()
+        recovered_offset = candidate.recovered.offset_seconds if candidate.recovered else None
+        last_seen = recovered_offset if recovered_offset is not None else candidate.last_open.offset_seconds
+        self.database.execute(
+            """
+            INSERT INTO inspection_events
+            (id, run_id, store_id, camera_id, rule_code, title, severity, status,
+             first_seen_offset, confirmed_offset, last_seen_offset, recovered_offset,
+             max_confidence, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'P2', 'pending_confirmation', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (event_id, run["id"], run["store_id"], run["camera_id"], rule_code,
+             title, candidate.first.offset_seconds, candidate.confirmed.offset_seconds,
+             last_seen, recovered_offset, candidate.peak.confidence, now, now),
+        )
+        evidence = [("start", candidate.first), ("confirmed", candidate.confirmed), ("peak", candidate.peak)]
+        if candidate.recovered:
+            evidence.append(("recovered", candidate.recovered))
+        for evidence_type, observation in evidence:
+            self.database.execute(
+                """
+                INSERT OR IGNORE INTO event_evidence
+                (id, event_id, finding_id, evidence_type, image_path, captured_offset, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"EVD-{uuid.uuid4().hex[:12].upper()}", event_id, observation.finding_id,
+                 evidence_type, observation.image_path, observation.offset_seconds, now),
+            )
+        self.database.execute(
+            """
+            INSERT INTO event_action_logs
+            (id, event_id, actor_id, action, from_status, to_status, note, created_at)
+            VALUES (?, ?, NULL, 'system_confirmed', 'observing', 'pending_confirmation', ?, ?)
+            """,
+            (f"LOG-{uuid.uuid4().hex[:12].upper()}", event_id,
+             f"{rule_code} 实验观察：仅入 Dashboard 等待人工复核；不发送真实飞书告警", now),
         )
         return self.database.fetch_one("SELECT * FROM inspection_events WHERE id=?", (event_id,)) or {}
 

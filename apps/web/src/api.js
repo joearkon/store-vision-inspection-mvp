@@ -22,7 +22,14 @@ export const apiUrl = (path) => `${API_BASE}${path}`;
 
 export const api = {
   bootstrap: () => request("/api/bootstrap"),
+  createCamera: (camera) => request("/api/cameras", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(camera)
+  }),
+  setCameraStatus: (id, status) => request(`/api/cameras/${id}`, {
+    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status })
+  }),
   dashboard: () => request("/api/dashboard"),
+  cameraDetail: (id, days = 1) => request(`/api/cameras/${encodeURIComponent(id)}/detail?days=${days}`),
   events: () => request("/api/events"),
   event: (id) => request(`/api/events/${id}`),
   eventAssignees: (id) => request(`/api/events/${id}/assignees`),
@@ -39,14 +46,15 @@ export const api = {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ default_analysis_mode: defaultAnalysisMode })
   }),
-  createRun: (videoId, notificationsEnabled, analysisMode) =>
+  createRun: (videoId, notificationsEnabled, analysisMode, ruleCode) =>
     request("/api/analysis-runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         video_id: videoId,
         notifications_enabled: notificationsEnabled,
-        analysis_mode: analysisMode
+        analysis_mode: analysisMode,
+        rule_code: ruleCode
       })
     }),
   eventAction: (id, action, note, assigneeId) =>

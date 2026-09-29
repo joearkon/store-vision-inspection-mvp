@@ -55,6 +55,17 @@ class VisionProvider(Protocol):
     ) -> VideoScreening:
         ...
 
+    def inspect_rule_frame(
+        self, rule_code: str, image_path: Path, camera_name: str, roi: dict[str, Any] | None
+    ) -> VisionObservation:
+        ...
+
+    def inspect_rule_segments(
+        self, rule_code: str, video_path: Path, camera_name: str,
+        fps: float, roi: dict[str, Any] | None
+    ) -> VideoScreening:
+        ...
+
 
 class DoubaoVisionProvider:
     def __init__(self, settings: Settings):
@@ -386,4 +397,131 @@ class DoubaoVisionProvider:
             image_quality=result["image_quality"],
             segments=segments if result["image_quality"] == "usable" else [],
             raw=body,
+        )
+
+    def inspect_rule_frame(
+        self, rule_code: str, image_path: Path, camera_name: str, roi: dict[str, Any] | None
+    ) -> VisionObservation:
+        if rule_code not in {"B1", "G1", "A2", "C1", "A3", "A4"}:
+            raise ValueError("不支持的实验规则")
+        if rule_code == "G1" and not roi:
+            raise ValueError("G1 缺少逐桌 ROI")
+        encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        mime = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
+        states = (["smoke", "flame", "steam", "clear", "unknown"] if rule_code == "B1" else
+                  ["departed_residual", "occupied", "clean", "cleaning", "unknown"] if rule_code == "G1" else
+                  ["messy", "clean", "in_use", "unknown"] if rule_code == "A3" else
+                  ["violation", "compliant", "unknown"])
+        operation_instructions = {
+            "A2": "仅判断操作区内正在操作的员工是否明确未戴工作帽或发网。头部清晰可见且确定缺失才返回 violation；已戴返回 compliant；遮挡、背对、不是员工返回 unknown。",
+            "C1": "仅判断操作区内正在操作的员工是否明确缺少规定的围裙或工服。躯干清晰可见且确定缺失才返回 violation；穿着合规返回 compliant；遮挡、普通顾客或无法确认返回 unknown。",
+            "A3": "仅判断固定操作台是否明显脏乱，存在持续可见的废弃物、污渍或杂物堆积才返回 messy；正常制作中的工具和原料返回 in_use；整洁返回 clean；遮挡或无法区分返回 unknown。",
+            "A4": "仅判断操作区地面是否明确存在积水或明显垃圾。必须看见地面及异常物体才返回 violation；干净干燥返回 compliant；反光、拖地清洁中、遮挡或无法分辨返回 unknown。",
+        }
+        instruction = operation_instructions.get(rule_code) or (
+            "只判断设备区域是否可见异常烟雾、异常明火、正常水蒸汽或无异常。"
+            "正常蒸煮水汽、灯光反射、正常受控火焰不得判为 smoke/flame；无法区分时返回 unknown。"
+            if rule_code == "B1" else
+            f"只判断桌位 {roi['id']}，归一化区域 {roi['bbox']}。顾客明确离席且桌面有顾客遗留杯盘/垃圾时"
+            "返回 departed_residual；顾客仍在座返回 occupied；员工正在清理返回 cleaning；"
+            "桌面干净返回 clean；遮挡或无法确认离席时返回 unknown。固定摆件不计残留。"
+        )
+        schema = {
+            "type": "object", "additionalProperties": False,
+            "required": ["image_quality", "state", "confidence", "evidence", "bbox"],
+            "properties": {
+                "image_quality": {"enum": ["usable", "insufficient"]},
+                "state": {"enum": states},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "evidence": {"type": "string"},
+                "bbox": {"anyOf": [
+                    {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+                    {"type": "null"},
+                ]},
+            },
+        }
+        payload = {
+            "model": self.settings.vision_model, "temperature": 0,
+            "thinking": {"type": "disabled"},
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": f"摄像头：{camera_name}。{instruction}只输出可见事实，不推断持续时间、严重度或责任。"},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}},
+            ]}],
+            "response_format": {"type": "json_schema", "json_schema": {
+                "name": f"{rule_code.lower()}_frame_observation", "strict": True, "schema": schema,
+            }},
+        }
+        body = self._post(payload)
+        content = body["choices"][0]["message"]["content"]
+        result = json.loads(content) if isinstance(content, str) else content
+        return VisionObservation(
+            image_quality=result["image_quality"],
+            state=result["state"] if result["image_quality"] == "usable" else "unknown",
+            confidence=float(result["confidence"]), evidence=result["evidence"],
+            bbox=result.get("bbox"), raw=body,
+        )
+
+    def inspect_rule_segments(
+        self, rule_code: str, video_path: Path, camera_name: str,
+        fps: float, roi: dict[str, Any] | None
+    ) -> VideoScreening:
+        if rule_code not in {"B1", "G1", "A2", "C1", "A3", "A4"}:
+            raise ValueError("不支持的实验规则")
+        if rule_code == "G1" and not roi:
+            raise ValueError("G1 缺少逐桌 ROI")
+        encoded = base64.b64encode(video_path.read_bytes()).decode("ascii")
+        operation_instructions = {
+            "A2": "仅列出操作区员工头部清楚可见且疑似未戴工作帽/发网的区间；遮挡、非员工和无法确认不列入。",
+            "C1": "仅列出操作区员工躯干清楚可见且疑似未穿围裙/工服的区间；遮挡、非员工和无法确认不列入。",
+            "A3": "仅列出操作台明显脏乱且持续可见的区间；制作过程正常摆放、短暂使用中的工具及原料不列入。",
+            "A4": "仅列出地面明确有积水或明显垃圾的区间；反光、正常拖地、无法确认不列入。",
+        }
+        instruction = operation_instructions.get(rule_code) or (
+            "本次只检测 B1：后厨设备附近出现的异常烟雾或失控明火。"
+            "逐个时间段核对是否真的看见烟雾从设备处升起、扩散，或看见失控火焰；"
+            "每段 evidence 必须明确写出烟雾/火焰的可见位置与形态。"
+            "冷藏柜门敞开、人员走动、正常蒸汽、灯光反射、正常受控火焰都不是 B1，不能列入。"
+            "如果没有可见的异常烟雾或失控明火，segments 返回空数组，不要猜测其他规则。"
+            if rule_code == "B1" else
+            f"只观察桌位 {roi['id']}，归一化区域 {roi['bbox']}。列出顾客明确离席后，"
+            "桌上仍有顾客遗留杯盘或垃圾、且无人清理的时间区间。顾客仍在座、固定摆件不要列入。"
+        )
+        schema = {
+            "type": "object", "additionalProperties": False,
+            "required": ["image_quality", "segments"],
+            "properties": {
+                "image_quality": {"enum": ["usable", "insufficient"]},
+                "segments": {"type": "array", "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["start_seconds", "end_seconds", "confidence", "evidence"],
+                    "properties": {
+                        "start_seconds": {"type": "number", "minimum": 0},
+                        "end_seconds": {"type": "number", "minimum": 0},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "evidence": {"type": "string"},
+                    },
+                }},
+            },
+        }
+        payload = {
+            "model": self.settings.vision_model, "temperature": 0,
+            "thinking": {"type": "disabled"},
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": f"摄像头：{camera_name}。{instruction}时间使用视频秒数。只观察，不判断是否达到规则阈值。"},
+                {"type": "video_url", "video_url": {"url": f"data:video/mp4;base64,{encoded}", "fps": fps}},
+            ]}],
+            "response_format": {"type": "json_schema", "json_schema": {
+                "name": f"{rule_code.lower()}_candidate_segments", "strict": True, "schema": schema,
+            }},
+        }
+        body = self._post(payload)
+        content = body["choices"][0]["message"]["content"]
+        result = json.loads(content) if isinstance(content, str) else content
+        segments = [VideoOpenSegment(
+            start_seconds=float(item["start_seconds"]), end_seconds=float(item["end_seconds"]),
+            confidence=float(item["confidence"]), evidence=item["evidence"],
+        ) for item in result["segments"] if float(item["end_seconds"]) >= float(item["start_seconds"])]
+        return VideoScreening(
+            image_quality=result["image_quality"],
+            segments=segments if result["image_quality"] == "usable" else [], raw=body,
         )

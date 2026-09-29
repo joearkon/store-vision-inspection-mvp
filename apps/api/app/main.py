@@ -5,7 +5,7 @@ import json
 import shutil
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+import sqlite3
 
 from .config import Settings
 from .db import Database, utc_now
@@ -23,11 +24,21 @@ class RunCreate(BaseModel):
     video_id: str
     notifications_enabled: bool = False
     analysis_mode: Literal["frame_baseline", "two_stage"] | None = None
-    rule_code: Literal["E1", "A1"] | None = None
+    rule_code: Literal["E1", "A1", "A2", "A3", "A4", "B1", "C1", "G1"] | None = None
 
 
 class RuleConfigUpdate(BaseModel):
     default_analysis_mode: Literal["frame_baseline", "two_stage"]
+
+
+class CameraCreate(BaseModel):
+    name: str
+    code: str
+    area_type: Literal["front_counter", "back_kitchen", "dining_area", "pickup_area", "storage"]
+
+
+class CameraStatusUpdate(BaseModel):
+    status: Literal["online", "offline"]
 
 
 class EventAction(BaseModel):
@@ -76,11 +87,91 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def bootstrap() -> dict[str, Any]:
         store = database.fetch_one("SELECT * FROM stores WHERE id='STORE-JTU'")
         cameras = database.fetch_all(
-            "SELECT * FROM camera_sources WHERE store_id='STORE-JTU' ORDER BY code"
+            """SELECT c.*,
+                      (SELECT MAX(ar.completed_at)
+                       FROM analysis_runs ar JOIN video_assets va ON va.id=ar.video_id
+                       WHERE va.camera_id=c.id AND ar.status='completed') AS last_analysis_at
+               FROM camera_sources c WHERE c.store_id='STORE-JTU' ORDER BY c.code"""
         )
-        return {"store": store, "cameras": cameras, "current_user": {
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        uploads = database.fetch_all(
+            "SELECT size_bytes, created_at FROM video_assets WHERE store_id='STORE-JTU' AND source_kind='upload'"
+        )
+        today_upload_bytes = sum(
+            item["size_bytes"] for item in uploads
+            if datetime.fromisoformat(item["created_at"]).astimezone(ZoneInfo("Asia/Shanghai")).date() == today
+        )
+        return {"store": store, "cameras": cameras, "today_upload_bytes": today_upload_bytes, "current_user": {
             "id": "USER-ADMIN", "display_name": "总部巡检管理员", "role": "system_admin"
         }}
+
+    @app.post("/api/cameras", status_code=201)
+    def create_camera(payload: CameraCreate) -> dict[str, Any]:
+        name, code = payload.name.strip(), payload.code.strip().upper()
+        if not 1 <= len(name) <= 60 or not 2 <= len(code) <= 32 or not all(ch.isascii() and (ch.isalnum() or ch == "-") for ch in code):
+            raise HTTPException(422, "名称或编号无效；编号仅支持英文字母、数字和连字符")
+        camera_id = f"CAM-{uuid.uuid4().hex[:12].upper()}"
+        try:
+            database.execute(
+                """INSERT INTO camera_sources
+                   (id, store_id, code, name, area_type, source_type, status, created_at)
+                   VALUES (?, 'STORE-JTU', ?, ?, ?, 'virtual', 'offline', ?)""",
+                (camera_id, code, name, payload.area_type, utc_now()),
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "摄像头编号已存在") from None
+        return database.fetch_one("SELECT * FROM camera_sources WHERE id=?", (camera_id,))
+
+    @app.patch("/api/cameras/{camera_id}")
+    def update_camera_status(camera_id: str, payload: CameraStatusUpdate) -> dict[str, Any]:
+        camera = database.fetch_one("SELECT * FROM camera_sources WHERE id=? AND store_id='STORE-JTU'", (camera_id,))
+        if not camera:
+            raise HTTPException(404, "摄像头不存在")
+        database.execute("UPDATE camera_sources SET status=? WHERE id=?", (payload.status, camera_id))
+        return database.fetch_one("SELECT * FROM camera_sources WHERE id=?", (camera_id,))
+
+    @app.get("/api/cameras/{camera_id}/detail")
+    def camera_detail(camera_id: str, days: int = Query(1, ge=1, le=30)) -> dict[str, Any]:
+        if days not in (1, 7, 30):
+            raise HTTPException(422, "仅支持今日、近 7 日或近 30 日")
+        camera = database.fetch_one(
+            "SELECT * FROM camera_sources WHERE id=? AND store_id='STORE-JTU'", (camera_id,)
+        )
+        if not camera:
+            raise HTTPException(404, "摄像头不存在")
+        local_today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        start = datetime.combine(local_today - timedelta(days=days - 1), time.min,
+                                 tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(timezone.utc).isoformat()
+        end = datetime.combine(local_today, time.max,
+                               tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(timezone.utc).isoformat()
+        counts = database.fetch_one(
+            """SELECT COUNT(*) AS total,
+                      SUM(CASE WHEN severity='P0' THEN 1 ELSE 0 END) AS p0,
+                      SUM(CASE WHEN severity='P1' THEN 1 ELSE 0 END) AS p1,
+                      SUM(CASE WHEN severity='P2' THEN 1 ELSE 0 END) AS p2
+               FROM inspection_events
+               WHERE camera_id=? AND store_id='STORE-JTU'
+                 AND status NOT IN ('false_positive','ignored')
+                 AND julianday(created_at)>=julianday(?) AND julianday(created_at)<=julianday(?)""",
+            (camera_id, start, end),
+        )
+        events = database.fetch_all(
+            """SELECT e.id, e.rule_code, e.title, e.severity, e.status,
+                      e.max_confidence, e.created_at,
+                      (SELECT ev.id FROM event_evidence ev WHERE ev.event_id=e.id
+                       ORDER BY CASE ev.evidence_type WHEN 'peak' THEN 0 WHEN 'confirmed' THEN 1 ELSE 2 END,
+                                ev.captured_offset LIMIT 1) AS thumbnail_evidence_id
+               FROM inspection_events e
+               WHERE e.camera_id=? AND e.store_id='STORE-JTU'
+                 AND julianday(e.created_at)>=julianday(?) AND julianday(e.created_at)<=julianday(?)
+               ORDER BY e.created_at DESC LIMIT 200""",
+            (camera_id, start, end),
+        )
+        return {
+            "camera": camera, "days": days,
+            "counts": {key: (counts or {}).get(key) or 0 for key in ("total", "p0", "p1", "p2")},
+            "events": events,
+        }
 
     @app.post("/api/videos", status_code=201)
     async def upload_video(
@@ -94,10 +185,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(415, "第一阶段仅支持 MP4 视频")
         if not database.fetch_one("SELECT id FROM stores WHERE id=?", (store_id,)):
             raise HTTPException(404, "门店不存在")
-        if not database.fetch_one(
-            "SELECT id FROM camera_sources WHERE id=? AND store_id=?", (camera_id, store_id)
-        ):
+        camera = database.fetch_one(
+            "SELECT id, status FROM camera_sources WHERE id=? AND store_id=?", (camera_id, store_id)
+        )
+        if not camera:
             raise HTTPException(404, "摄像头不存在或不属于该门店")
+        if camera["status"] != "online":
+            raise HTTPException(409, "该演示视频源已停用，请先在摄像头管理中启用")
 
         video_id = f"VID-{uuid.uuid4().hex[:12].upper()}"
         target = current_settings.data_dir / "videos" / f"{video_id}.mp4"
@@ -140,15 +234,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/analysis-runs", status_code=201)
     def create_run(payload: RunCreate) -> dict[str, Any]:
         video = database.fetch_one(
-            """SELECT va.id, c.area_type FROM video_assets va
+            """SELECT va.id, c.area_type, c.roi_json FROM video_assets va
                JOIN camera_sources c ON c.id=va.camera_id WHERE va.id=?""",
             (payload.video_id,),
         )
         if not video:
             raise HTTPException(404, "视频不存在")
-        rule_code = payload.rule_code or {"storage": "E1", "front_counter": "A1"}.get(video["area_type"])
+        defaults = {"storage": "E1", "front_counter": "A1", "back_kitchen": "B1"}
+        allowed = {
+            "storage": {"E1"},
+            "front_counter": {"A1", "A2", "C1", "A3", "A4"},
+            "back_kitchen": {"B1", "A2", "C1", "A3", "A4"},
+        }
+        rule_code = payload.rule_code or defaults.get(video["area_type"])
         if not rule_code:
             raise HTTPException(400, "该摄像头区域暂无已实现的自动检测规则")
+        if rule_code not in allowed.get(video["area_type"], set()):
+            raise HTTPException(400, "所选规则与摄像头区域不匹配")
+        if rule_code == "G1" and not video["roi_json"]:
+            raise HTTPException(400, "餐区摄像头必须配置逐桌 ROI")
         run_id = f"RUN-{uuid.uuid4().hex[:12].upper()}"
         configured = database.fetch_one(
             "SELECT value FROM system_settings WHERE key='default_analysis_mode'"
@@ -170,7 +274,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             (
                 run_id,
                 payload.video_id,
-                int(payload.notifications_enabled and rule_code != "A1"),
+                int(payload.notifications_enabled and rule_code == "E1"),
                 analysis_mode,
                 rule_code,
                 current_settings.frame_rate,
@@ -183,7 +287,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def list_runs() -> list[dict[str, Any]]:
         runs = database.fetch_all(
             """
-            SELECT ar.*, va.original_name, va.camera_id
+            SELECT ar.*, va.original_name, va.camera_id, va.duration_seconds,
+                   (SELECT COUNT(*) FROM inspection_events ie WHERE ie.run_id=ar.id) AS event_count
             FROM analysis_runs ar JOIN video_assets va ON va.id=ar.video_id
             ORDER BY ar.created_at DESC LIMIT 100
             """
@@ -196,7 +301,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_run(run_id: str) -> dict[str, Any]:
         run = database.fetch_one(
             """
-            SELECT ar.*, va.original_name, va.camera_id
+            SELECT ar.*, va.original_name, va.camera_id, va.duration_seconds
             FROM analysis_runs ar JOIN video_assets va ON va.id=ar.video_id
             WHERE ar.id=?
             """,
@@ -205,6 +310,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not run:
             raise HTTPException(404, "分析任务不存在")
         run["estimated_fallback_tokens"] = int(run["total_frames"] or 0) * 1800
+        run["event_count"] = (database.fetch_one(
+            "SELECT COUNT(*) AS count FROM inspection_events WHERE run_id=?", (run_id,)
+        ) or {"count": 0})["count"]
+        run["events"] = database.fetch_all(
+            """SELECT id, title, severity, status, first_seen_offset, confirmed_offset
+               FROM inspection_events WHERE run_id=? ORDER BY confirmed_offset, id""",
+            (run_id,),
+        )
         return run
 
     @app.post("/api/analysis-runs/{run_id}/approve-fallback")
@@ -271,6 +384,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             """
             SELECT e.*, s.name AS store_name, c.name AS camera_name,
                    u.display_name AS assignee_name,
+                   (SELECT ev.id FROM event_evidence ev WHERE ev.event_id=e.id
+                    ORDER BY CASE ev.evidence_type WHEN 'peak' THEN 0 WHEN 'confirmed' THEN 1 ELSE 2 END,
+                             ev.captured_offset LIMIT 1) AS thumbnail_evidence_id,
                    CASE WHEN e.status NOT IN ('resolved','false_positive','ignored')
                              AND e.due_at IS NOT NULL AND e.due_at < ?
                         THEN 1 ELSE 0 END AS overdue
@@ -434,7 +550,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         local_start = datetime.combine(local_now.date(), time.min, tzinfo=ZoneInfo("Asia/Shanghai"))
         local_end = datetime.combine(local_now.date(), time.max, tzinfo=ZoneInfo("Asia/Shanghai"))
         today = database.fetch_one(
-            "SELECT COUNT(*) AS count FROM inspection_events WHERE created_at>=? AND created_at<=?",
+            "SELECT COUNT(*) AS count FROM inspection_events WHERE status NOT IN ('false_positive','ignored') AND julianday(created_at)>=julianday(?) AND julianday(created_at)<=julianday(?)",
             (local_start.astimezone(timezone.utc).isoformat(),
              local_end.astimezone(timezone.utc).isoformat()),
         )
@@ -448,6 +564,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         completed_runs = database.fetch_one(
             "SELECT COUNT(*) AS count FROM analysis_runs WHERE status='completed'"
         )
+        cameras = database.fetch_all(
+            "SELECT id, name, area_type, source_type, status FROM camera_sources WHERE store_id='STORE-JTU' ORDER BY code"
+        )
         return {
             "metrics": {
                 "today_events": today["count"] if today else 0,
@@ -456,6 +575,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "total_cameras": total["count"] if total else 0,
                 "completed_runs": completed_runs["count"] if completed_runs else 0,
             },
+            "camera_sources": cameras,
             "recent_events": events,
         }
 

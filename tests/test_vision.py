@@ -151,6 +151,78 @@ class VisionProviderTests(unittest.TestCase):
                 result = provider.inspect_ppe(image, "前台-01")
         self.assertEqual(result.state, "unknown")
 
+    def test_b1_frame_observes_steam_without_promoting_to_smoke(self) -> None:
+        body = {"choices": [{"message": {"content": json.dumps({
+            "image_quality": "usable", "state": "steam", "confidence": .92,
+            "evidence": "热水壶口有白色水汽", "bbox": [0.2, 0.2, 0.5, 0.6],
+        })}}]}
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "steam.jpg"
+            image.write_bytes(b"jpeg")
+            provider = DoubaoVisionProvider(Settings(vision_api_key="test-key"))
+            with patch.object(provider, "_post", return_value=body) as post:
+                result = provider.inspect_rule_frame("B1", image, "后厨-01", None)
+        self.assertEqual(result.state, "steam")
+        self.assertIn("steam", post.call_args.args[0]["response_format"]["json_schema"]["schema"]["properties"]["state"]["enum"])
+
+    def test_g1_requires_roi_and_can_screen_departure_interval(self) -> None:
+        provider = DoubaoVisionProvider(Settings(vision_api_key="test-key"))
+        with tempfile.TemporaryDirectory() as directory:
+            video = Path(directory) / "table.mp4"
+            video.write_bytes(b"video")
+            with self.assertRaises(ValueError):
+                provider.inspect_rule_segments("G1", video, "用餐区-01", .2, None)
+            body = {"choices": [{"message": {"content": json.dumps({
+                "image_quality": "usable", "segments": [{
+                    "start_seconds": 5, "end_seconds": 49, "confidence": .9,
+                    "evidence": "顾客离席后桌上仍有杯盘",
+                }],
+            })}}]}
+            roi = {"id": "TABLE-TEST-01", "bbox": [0, 0, 1, 1]}
+            with patch.object(provider, "_post", return_value=body) as post:
+                result = provider.inspect_rule_segments("G1", video, "用餐区-01", .2, roi)
+        self.assertEqual(result.segments[0].start_seconds, 5)
+        self.assertIn("TABLE-TEST-01", post.call_args.args[0]["messages"][0]["content"][0]["text"])
+
+    def test_b1_screening_excludes_unrelated_fridge_door_events(self) -> None:
+        body = {"choices": [{"message": {"content": json.dumps({
+            "image_quality": "usable", "segments": [],
+        })}}]}
+        with tempfile.TemporaryDirectory() as directory:
+            video = Path(directory) / "smoke.mp4"
+            video.write_bytes(b"video")
+            provider = DoubaoVisionProvider(Settings(vision_api_key="test-key"))
+            with patch.object(provider, "_post", return_value=body) as post:
+                result = provider.inspect_rule_segments("B1", video, "后厨-01", .2, None)
+        self.assertEqual(result.segments, [])
+        prompt = post.call_args.args[0]["messages"][0]["content"][0]["text"]
+        self.assertIn("冷藏柜门敞开", prompt)
+        self.assertIn("segments 返回空数组", prompt)
+
+    def test_operation_rules_use_distinct_states_and_exclusions(self) -> None:
+        provider = DoubaoVisionProvider(Settings(vision_api_key="test-key"))
+        cases = (
+            ("A2", "violation", "遮挡"),
+            ("C1", "violation", "遮挡"),
+            ("A3", "messy", "正常制作"),
+            ("A4", "violation", "反光"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            frame = Path(directory) / "frame.jpg"
+            frame.write_bytes(b"jpeg")
+            for rule, state, exclusion in cases:
+                with self.subTest(rule=rule):
+                    body = {"choices": [{"message": {"content": json.dumps({
+                        "image_quality": "usable", "state": state, "confidence": .91,
+                        "evidence": "测试可见事实", "bbox": [0, 0, 1, 1],
+                    })}}]}
+                    with patch.object(provider, "_post", return_value=body) as post:
+                        observation = provider.inspect_rule_frame(rule, frame, "后厨-01", None)
+                    self.assertEqual(observation.state, state)
+                    payload = post.call_args.args[0]
+                    self.assertIn(exclusion, payload["messages"][0]["content"][0]["text"])
+                    self.assertIn("unknown", payload["response_format"]["json_schema"]["schema"]["properties"]["state"]["enum"])
+
 
 if __name__ == "__main__":
     unittest.main()

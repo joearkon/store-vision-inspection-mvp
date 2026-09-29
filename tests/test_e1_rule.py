@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from apps.api.app.rules import A1PPEAggregator, E1FridgeDoorAggregator, E1Observation
+from apps.api.app.rules import A1PPEAggregator, E1FridgeDoorAggregator, E1Observation, TimedObservationAggregator
 
 
 def observation(second: int, state: str, confidence: float = 0.9) -> E1Observation:
@@ -79,6 +79,31 @@ class A1PPEAggregatorTests(unittest.TestCase):
             observation(4, "compliant"), observation(5, "compliant"),
         ]
         self.assertEqual(A1PPEAggregator().aggregate(frames), [])
+
+
+class ExperimentalRuleAggregatorTests(unittest.TestCase):
+    def test_b1_smoke_confirms_after_two_seconds_but_steam_does_not(self) -> None:
+        rule = TimedObservationAggregator({"smoke", "flame"}, 2)
+        self.assertEqual(rule.aggregate([observation(i, "steam") for i in range(5)]), [])
+        event = rule.aggregate([observation(i, "smoke") for i in range(5)] + [observation(5, "clear")])[0]
+        self.assertEqual(event.confirmed.offset_seconds, 2)
+        self.assertEqual(event.recovered.offset_seconds, 5)
+
+    def test_g1_requires_departure_residual_for_full_120_seconds(self) -> None:
+        rule = TimedObservationAggregator("departed_residual", 120)
+        self.assertEqual(rule.aggregate([observation(i, "departed_residual") for i in range(50)]), [])
+        occupied = [observation(i, "occupied") for i in range(130)]
+        self.assertEqual(rule.aggregate(occupied), [])
+        event = rule.aggregate([observation(i, "departed_residual") for i in range(121)])[0]
+        self.assertEqual(event.confirmed.offset_seconds, 120)
+
+    def test_unknown_and_sampling_gap_cannot_prove_continuity(self) -> None:
+        rule = TimedObservationAggregator("departed_residual", 120)
+        observations = [observation(i, "departed_residual") for i in range(60)]
+        observations += [observation(60, "unknown")]
+        observations += [observation(i, "departed_residual") for i in range(61, 181)]
+        self.assertEqual(rule.aggregate(observations), [])
+        self.assertEqual(rule.aggregate([observation(0, "smoke"), observation(120, "smoke")]), [])
 
 
 if __name__ == "__main__":
