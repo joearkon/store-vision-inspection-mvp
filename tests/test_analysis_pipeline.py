@@ -145,7 +145,7 @@ class TailRecoveryVisionProvider:
                                  {"usage": {"prompt_tokens": 10, "completion_tokens": 2}})
 
 class AnalysisPipelineTests(unittest.TestCase):
-    def _run_video(self, root: Path, rule: str, camera: str, seconds: int, provider):
+    def _run_video(self, root: Path, rule: str, camera: str, seconds: int, provider, snapshot=None):
         settings = Settings(project_root=root, data_dir=root / "data",
                             database_path=root / "data" / "test.sqlite3", frame_rate=1)
         settings.ensure_directories()
@@ -172,6 +172,8 @@ class AnalysisPipelineTests(unittest.TestCase):
                VALUES ('RUN-SCENARIO', 'VID-SCENARIO', 'queued', 0, 'queued', 0,
                 'two_stage', ?, 1, ?)""", (rule, now),
         )
+        if snapshot:
+            database.execute("UPDATE analysis_runs SET rule_config_snapshot_json=? WHERE id='RUN-SCENARIO'", (database.json(snapshot),))
         AnalysisRunner(settings, database, provider).run("RUN-SCENARIO")
         return database
 
@@ -183,7 +185,7 @@ class AnalysisPipelineTests(unittest.TestCase):
                 events = database.fetch_all("SELECT * FROM inspection_events")
                 self.assertEqual(len(events), expected)
                 if events:
-                    self.assertEqual(events[0]["severity"], "P2")
+                    self.assertEqual(events[0]["severity"], "P0")
                     self.assertEqual(events[0]["confirmed_offset"], 2)
                 self.assertEqual(database.fetch_all("SELECT * FROM notification_deliveries"), [])
 
@@ -218,6 +220,7 @@ class AnalysisPipelineTests(unittest.TestCase):
                 self.assertEqual(events[0]["rule_code"], rule)
                 self.assertEqual(events[0]["confirmed_offset"], 4)
                 self.assertEqual(events[0]["severity"], "P1")
+                self.assertIsNone(events[0]["due_at"])
                 self.assertEqual(database.fetch_all("SELECT * FROM notification_deliveries"), [])
 
     def test_operation_unknown_or_compliant_does_not_create_event(self) -> None:
@@ -460,6 +463,8 @@ class AnalysisPipelineTests(unittest.TestCase):
             self.assertEqual(run["status"], "completed")
             self.assertEqual(run["processed_frames"], 5)
             self.assertEqual(event["confirmed_offset"], 3)
+            self.assertEqual(event["severity"], "P0")
+            self.assertIsNone(event["due_at"])
             self.assertEqual(event["last_seen_offset"], 4)
             self.assertEqual(event["recovered_offset"], 4)
             self.assertEqual(

@@ -5,6 +5,7 @@ export function filterRectificationEvents(events, filters, now = new Date()) {
     ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1))
     : null;
   return events.filter((event) => {
+    if (filters.rule && filters.rule !== "all" && event.rule_code !== filters.rule) return false;
     if (filters.status === "pending" && !["pending_confirmation", "acknowledged"].includes(event.status)) return false;
     if (filters.status === "rectifying" && event.status !== "rectifying") return false;
     if (filters.status === "resolved" && event.status !== "resolved") return false;

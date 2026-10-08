@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "门店 AI 视频巡检 MVP"
 requires-python = ">=3.10"
 dependencies = [
+  "Pillow>=12,<13",
   "fastapi>=0.141,<1",
   "httpx>=0.28,<1",
   "pydantic>=2.13,<3",

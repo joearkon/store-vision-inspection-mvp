@@ -22,3 +22,10 @@ describe("rectification list", () => {
     expect(csv).not.toContain("EVT-2");
   });
 });
+
+it("combines rule selection with severity and preserves older callers", () => {
+ const filters = {status:"all",severity:"P2",period:"all",query:"",rule:"A1"};
+ expect(filterRectificationEvents(events,filters).map(e=>e.id)).toEqual(["EVT-2"]);
+ expect(filterRectificationEvents(events,{...filters,rule:"E1"})).toEqual([]);
+ expect(filterRectificationEvents(events,{...filters,rule:"all"})).toHaveLength(1);
+});

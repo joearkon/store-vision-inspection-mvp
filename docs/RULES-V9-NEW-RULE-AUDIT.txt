@@ -1,0 +1,4 @@
+Demo 9 review
+Fixed: new rule lacked params, notifications, observationSteps, sampleStats and display metadata; detail rendering dereferenced missing fields. Added empty draft defaults. Fixed extra parenthesis in SOPTemplatePage.
+Checks: all script parsing; existing rule detail tabs; new-rule ConfigTab/ObserveTab/TestTab/VersionTab server rendering pass. Browser clicks not verified. No deployment.
+Requirements gaps: ConfigField is read-only; no template selector; no independent media input selector; no standard-image upload or photo requirements; no editable event/timing/data-source fields; save/test buttons lack implementation; no persistence, approval, trial publish or rollback. New-rule versions fallback can display published despite draft; empty statistics are placeholders not measured accuracy. These must be addressed in next prototype.

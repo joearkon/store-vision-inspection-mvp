@@ -101,6 +101,29 @@ class DoubaoVisionProvider:
                 time.sleep(min(max(delay, 1), 30))
         raise RuntimeError("视觉接口没有返回结果")
 
+    def inspect_scene(self, images: list[Path]) -> dict[str, Any]:
+        box={"type":"array","items":{"type":"number","minimum":0,"maximum":1000},"minItems":4,"maxItems":4}
+        schema={"type":"object","additionalProperties":False,"required":["image_quality","regions","video_start_clock","coordinate_system"],"properties":{
+            "coordinate_system":{"enum":["normalized_1000"]},
+            "image_quality":{"enum":["usable","insufficient"]},
+            "video_start_clock":{"type":["string","null"]},
+            "regions":{"type":"array","maxItems":20,"items":{"type":"object","additionalProperties":False,
+                "required":["kind","name","bbox","confidence","evidence"],"properties":{
+                    "kind":{"enum":["table","counter","operation","floor","fridge"]},
+                    "name":{"type":"string"},"bbox":box,"confidence":{"type":"number","minimum":0,"maximum":1},"evidence":{"type":"string"}}}}}}
+        content=[{"type":"text","text":"按第一张画面坐标识别实际可见的餐桌桌面(table)、前台(counter)、员工制作区(operation)、地面(floor)、明确冷藏柜(fridge)。每张餐桌分别标框，table只框桌面不含桌腿座椅；evidence每项不超过30个汉字；bbox使用0–1000千分比坐标[x1,y1,x2,y2]，例如[101,490,178,676]；禁止输出像素坐标或0–1小数坐标。coordinate_system必须为normalized_1000，不要把座椅/海报当餐桌，不要凭门店类别猜冰箱。只输出可见区域及依据，遮挡或不确定降低confidence。后两张用于核对机位稳定性，机位变化/无法对齐返回insufficient。video_start_clock仅抄第一张画面日期时间中的HH:MM，无清晰时钟返回null。不要判断违规、垃圾或是否完成清洁。"}]
+        for path in images:
+            content.append({"type":"image_url","image_url":{"url":"data:image/jpeg;base64,"+base64.b64encode(path.read_bytes()).decode()}})
+        raw=self._post({"model":self.settings.vision_model,"thinking":{"type":"disabled"},"temperature":0,"messages":[{"role":"user","content":content}],
+            "response_format":{"type":"json_schema","json_schema":{"name":"store_scene","strict":True,"schema":schema}}})
+        result=json.loads(raw['choices'][0]['message']['content'])
+        if result.get('coordinate_system')!='normalized_1000':
+            raise ValueError('模型坐标系不明确，未使用识别区域')
+        for region in result['regions']:
+            region['bbox']=[v/1000 for v in region['bbox']]
+        result['coordinate_system']='normalized_01'
+        return {"result":result,"raw":raw}
+
     def inspect_fridge_door(self, image_path: Path, camera_name: str) -> VisionObservation:
         mime = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
         encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
@@ -402,17 +425,18 @@ class DoubaoVisionProvider:
     def inspect_rule_frame(
         self, rule_code: str, image_path: Path, camera_name: str, roi: dict[str, Any] | None
     ) -> VisionObservation:
-        if rule_code not in {"B1", "G1", "A2", "C1", "A3", "A4"}:
+        if rule_code not in {"B1", "G1", "G2", "M1", "A2", "C1", "A3", "A4"}:
             raise ValueError("不支持的实验规则")
-        if rule_code == "G1" and not roi:
+        if rule_code in {"G1", "G2"} and not roi:
             raise ValueError("G1 缺少逐桌 ROI")
         encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
         mime = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
-        states = (["smoke", "flame", "steam", "clear", "unknown"] if rule_code == "B1" else
-                  ["departed_residual", "occupied", "clean", "cleaning", "unknown"] if rule_code == "G1" else
+        states = (["mopping", "not_mopping", "unknown"] if rule_code == "M1" else ["smoke", "flame", "steam", "clear", "unknown"] if rule_code == "B1" else
+                  ["departed_residual", "occupied", "clean", "cleaning", "unknown"] if rule_code in {"G1", "G2"} else
                   ["messy", "clean", "in_use", "unknown"] if rule_code == "A3" else
                   ["violation", "compliant", "unknown"])
         operation_instructions = {
+            "M1": "只判断是否明确看见员工使用拖把，拖把头与地面接触并擦拭地面。看到拖地返回 mopping；清楚看见地面但没有此动作返回 not_mopping；工具不清楚、遮挡或无法区分扫地时返回 unknown。不推断整个早上是否清洁、拖地是否覆盖全店或清洁质量。",
             "A2": "仅判断操作区内正在操作的员工是否明确未戴工作帽或发网。头部清晰可见且确定缺失才返回 violation；已戴返回 compliant；遮挡、背对、不是员工返回 unknown。",
             "C1": "仅判断操作区内正在操作的员工是否明确缺少规定的围裙或工服。躯干清晰可见且确定缺失才返回 violation；穿着合规返回 compliant；遮挡、普通顾客或无法确认返回 unknown。",
             "A3": "仅判断固定操作台是否明显脏乱，存在持续可见的废弃物、污渍或杂物堆积才返回 messy；正常制作中的工具和原料返回 in_use；整洁返回 clean；遮挡或无法区分返回 unknown。",
@@ -426,6 +450,13 @@ class DoubaoVisionProvider:
             "返回 departed_residual；顾客仍在座返回 occupied；员工正在清理返回 cleaning；"
             "桌面干净返回 clean；遮挡或无法确认离席时返回 unknown。固定摆件不计残留。"
         )
+        if rule_code == "G2":
+            instruction = (
+                f"只观察桌位 {roi['id']}，归一化区域 {roi['bbox']}。"
+                "有人在座返回 occupied；无人就座且桌面有疑似纸张、杯盘或遗留物品返回 departed_residual；"
+                "空桌无物返回 clean；正在清理返回 cleaning；遮挡返回 unknown。"
+                "只描述可见物品，不把纸张确定为垃圾，不推断离席过程或清洁超时；明确固定摆件不计。"
+            )
         schema = {
             "type": "object", "additionalProperties": False,
             "required": ["image_quality", "state", "confidence", "evidence", "bbox"],
@@ -465,12 +496,13 @@ class DoubaoVisionProvider:
         self, rule_code: str, video_path: Path, camera_name: str,
         fps: float, roi: dict[str, Any] | None
     ) -> VideoScreening:
-        if rule_code not in {"B1", "G1", "A2", "C1", "A3", "A4"}:
+        if rule_code not in {"B1", "G1", "G2", "M1", "A2", "C1", "A3", "A4"}:
             raise ValueError("不支持的实验规则")
-        if rule_code == "G1" and not roi:
+        if rule_code in {"G1", "G2"} and not roi:
             raise ValueError("G1 缺少逐桌 ROI")
         encoded = base64.b64encode(video_path.read_bytes()).decode("ascii")
         operation_instructions = {
+            "M1": "只列出明确可见员工使用拖把擦拭地面的区间。必须观察到拖把头接触地面并往返移动；扫地、走路、拿杆不算。无可见动作时返回空数组；不推断开店截止时间、全天未拖地或清洁质量。",
             "A2": "仅列出操作区员工头部清楚可见且疑似未戴工作帽/发网的区间；遮挡、非员工和无法确认不列入。",
             "C1": "仅列出操作区员工躯干清楚可见且疑似未穿围裙/工服的区间；遮挡、非员工和无法确认不列入。",
             "A3": "仅列出操作台明显脏乱且持续可见的区间；制作过程正常摆放、短暂使用中的工具及原料不列入。",
@@ -486,6 +518,13 @@ class DoubaoVisionProvider:
             f"只观察桌位 {roi['id']}，归一化区域 {roi['bbox']}。列出顾客明确离席后，"
             "桌上仍有顾客遗留杯盘或垃圾、且无人清理的时间区间。顾客仍在座、固定摆件不要列入。"
         )
+        if rule_code == "G2":
+            instruction = (
+                f"只观察桌位 {roi['id']}，归一化区域 {roi['bbox']}。"
+                "先核对顾客在座到起身离开的过程，再列出离席后桌面有疑似纸张、杯盘或遗留物品的区间。"
+                "如果没有观察到从有人在座到离开的变化，返回空数组。"
+                "只写可见物品，不认定垃圾、不判断清洁超时，明确固定摆件不计。"
+            )
         schema = {
             "type": "object", "additionalProperties": False,
             "required": ["image_quality", "segments"],

@@ -11,6 +11,7 @@ export const statusLabels = {
   queued: "等待分析",
   claimed: "准备分析",
   running: "分析中",
+  cancelled: "已取消",
   awaiting_approval: "等待确认",
   completed: "已完成",
   failed: "分析失败",

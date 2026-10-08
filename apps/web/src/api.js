@@ -1,3 +1,5 @@
+import { isShowcaseMode, showcaseApi } from "./showcaseApi";
+
 // Keep production deploys same-origin, but make the local development site
 // independent from how Vite was launched.  Starting Vite from the repository
 // root can otherwise skip apps/web/vite.config.js and return index.html for
@@ -20,7 +22,16 @@ async function request(path, options = {}) {
 
 export const apiUrl = (path) => `${API_BASE}${path}`;
 
-export const api = {
+const liveApi = {
+  sop: (storeId = "STORE-JTU") => request(`/api/sop?store_id=${encodeURIComponent(storeId)}`),
+  saveSop: (storeId,id,template) => request(`/api/sop/templates/${encodeURIComponent(id)}?store_id=${encodeURIComponent(storeId)}`,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify(template)}),
+  disableSop: (storeId,id) => request(`/api/sop/templates/${encodeURIComponent(id)}?store_id=${encodeURIComponent(storeId)}`,{method:"DELETE"}),
+  analyzeSop: (taskId,itemId,payload) => request(`/api/sop/tasks/${encodeURIComponent(taskId)}/analyze/${encodeURIComponent(itemId)}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)}),
+  sopRecord: (taskId,itemId,payload) => request(`/api/sop/tasks/${encodeURIComponent(taskId)}/records/${encodeURIComponent(itemId)}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)}),
+  scene: (id) => request(`/api/videos/${encodeURIComponent(id)}/scene`),
+  confirmScene: (id,regionKinds) => request(`/api/videos/${encodeURIComponent(id)}/scene/confirm`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({region_kinds:regionKinds})}),
+  retryScene: (id) => request(`/api/videos/${encodeURIComponent(id)}/scene/retry`,{method:"POST"}),
+  operationsConfig: () => request("/api/operations/config"),
   bootstrap: () => request("/api/bootstrap"),
   createCamera: (camera) => request("/api/cameras", {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(camera)
@@ -32,11 +43,17 @@ export const api = {
   cameraDetail: (id, days = 1) => request(`/api/cameras/${encodeURIComponent(id)}/detail?days=${days}`),
   events: () => request("/api/events"),
   event: (id) => request(`/api/events/${id}`),
+  feishuTestPreview: (id) => request(`/api/feishu/test-preview/${encodeURIComponent(id)}`),
+  feishuTestSend: (eventId) => request("/api/feishu/test-send", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ event_id: eventId, confirm: true })
+  }),
   eventAssignees: (id) => request(`/api/events/${id}/assignees`),
   evidenceUrl: (id) => apiUrl(`/api/media/evidence/${id}`),
-  eventVideoUrl: (id) => apiUrl(`/api/media/events/${id}/video`),
+  eventVideoUrl: (id) => apiUrl(`/api/media/events/${id}/video?playback=h264-v1`),
   runs: () => request("/api/analysis-runs"),
   run: (id) => request(`/api/analysis-runs/${id}`),
+  cancelRun: (id) => request(`/api/analysis-runs/${id}/cancel`, {method:"POST"}),
   approveFallback: (id) => request(`/api/analysis-runs/${id}/approve-fallback`, {
     method: "POST"
   }),
@@ -46,7 +63,7 @@ export const api = {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ default_analysis_mode: defaultAnalysisMode })
   }),
-  createRun: (videoId, notificationsEnabled, analysisMode, ruleCode) =>
+  createRun: (videoId, notificationsEnabled, analysisMode, ruleCode, extra = {}) =>
     request("/api/analysis-runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -54,7 +71,7 @@ export const api = {
         video_id: videoId,
         notifications_enabled: notificationsEnabled,
         analysis_mode: analysisMode,
-        rule_code: ruleCode
+        rule_code: ruleCode, ...extra
       })
     }),
   eventAction: (id, action, note, assigneeId) =>
@@ -63,12 +80,14 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action, note, assignee_id: assigneeId })
     }),
-  uploadVideo: ({ file, cameraId, onProgress }) =>
+  uploadVideo: ({ file, cameraId, storeId = "STORE-JTU", detectScene = false, explicitRules = false, onProgress }) =>
     new Promise((resolve, reject) => {
       const query = new URLSearchParams({
         filename: file.name,
-        camera_id: cameraId,
-        store_id: "STORE-JTU",
+        ...(cameraId ? {camera_id:cameraId} : {}),
+        detect_scene:String(detectScene),
+        explicit_rules:String(explicitRules),
+        store_id: storeId,
         source_kind: "upload"
       });
       const xhr = new XMLHttpRequest();
@@ -86,3 +105,5 @@ export const api = {
       xhr.send(file);
     })
 };
+
+export const api = isShowcaseMode ? showcaseApi : liveApi;

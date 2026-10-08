@@ -18,3 +18,14 @@ export const cameraAreaNames = {
 export const dashboardCameraIds = [
   "CAM-FRONT-01", "CAM-BACK-01", "CAM-DINING-01", "CAM-PICKUP-01"
 ];
+
+export function dashboardCameraSummary(cameras = []) {
+  const byId = new Map(cameras.map((camera) => [camera.id, camera]));
+  const real = ["CAM-MOMOYO-REAL-FRONT","CAM-MOMOYO-REAL-TABLE"].map(id=>byId.get(id)).filter(camera=>camera?.preview_image_url);
+  const visible = [...real,...dashboardCameraIds.map((id) => byId.get(id)).filter(Boolean)].slice(0,4);
+  return {
+    visible,
+    enabled: visible.filter((camera) => camera.status === "online").length,
+    total: visible.length,
+  };
+}

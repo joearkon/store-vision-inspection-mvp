@@ -21,3 +21,7 @@ data/*.sqlite*
 *.log
 .DS_Store
 Thumbs.db
+
+# Local runtime data and temporary adaptation helpers
+data/
+tmp_*.py

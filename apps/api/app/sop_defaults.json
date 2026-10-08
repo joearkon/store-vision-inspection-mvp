@@ -1,0 +1,319 @@
+[
+  {
+    "id": "SOP-001",
+    "name": "开店检查",
+    "type": "morning",
+    "typeName": "开店 SOP",
+    "icon": "sunrise",
+    "description": "开店时段内完成的 AI 视觉巡检",
+    "duration": "30 分钟",
+    "totalItems": 2,
+    "frequency": "每日一次",
+    "scheduledTime": "09:10-09:30",
+    "responsibleRole": "店长 / 当班主管",
+    "color": "#F59E0B",
+    "items": [
+      {
+        "id": 1,
+        "category": "员工着装",
+        "text": "员工是否全程佩戴口罩",
+        "required": true,
+        "aiVerifiable": true,
+        "aiType": "mask_detection"
+      },
+      {
+        "id": 2,
+        "category": "环境清洁",
+        "text": "开店时段内是否完成拖地清洁",
+        "required": true,
+        "aiVerifiable": true,
+        "aiType": "floor_mopping",
+        "timeWindow": "09:10-09:30"
+      }
+    ],
+    "enabled": true
+  },
+  {
+    "id": "SOP-002",
+    "name": "闭店检查",
+    "type": "closing",
+    "typeName": "闭店 SOP",
+    "icon": "moon",
+    "description": "每日闭店后必须完成的清洁、安全、盘点检查",
+    "duration": "30 分钟",
+    "totalItems": 15,
+    "frequency": "每日一次",
+    "scheduledTime": "22:30",
+    "responsibleRole": "店长 / 当班主管",
+    "color": "#6366F1",
+    "items": [
+      {
+        "id": 1,
+        "category": "卫生规范",
+        "text": "所有设备拆解清洗消毒",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 2,
+        "category": "卫生规范",
+        "text": "操作台彻底清洁，无残留物料",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 3,
+        "category": "卫生规范",
+        "text": "地面全面拖地、无污渍积水",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 4,
+        "category": "卫生规范",
+        "text": "垃圾桶清空并更换垃圾袋",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 5,
+        "category": "卫生规范",
+        "text": "卫生间清洁消毒",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 6,
+        "category": "物料管理",
+        "text": "剩余原料密封冷藏 / 冷冻",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 7,
+        "category": "物料管理",
+        "text": "当日损耗登记",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 8,
+        "category": "物料管理",
+        "text": "盘点物料库存，不足提交采购",
+        "required": false,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 9,
+        "category": "设备状态",
+        "text": "所有电器设备断电（除冰箱）",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 10,
+        "category": "设备状态",
+        "text": "制冰机排水清洗",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 11,
+        "category": "安全检查",
+        "text": "燃气总阀关闭确认",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 12,
+        "category": "安全检查",
+        "text": "门窗锁闭检查",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 13,
+        "category": "安全检查",
+        "text": "监控设备运行正常",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 14,
+        "category": "顾客体验",
+        "text": "用餐区全部桌椅归位",
+        "required": false,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 15,
+        "category": "顾客体验",
+        "text": "门店外观清洁，招牌关闭",
+        "required": false,
+        "aiVerifiable": false,
+        "aiType": null
+      }
+    ],
+    "enabled": true
+  },
+  {
+    "id": "SOP-003",
+    "name": "每日正常巡检",
+    "type": "hourly",
+    "typeName": "时段 SOP",
+    "icon": "clock",
+    "description": "营业期间上午、下午各一次卫生抽检",
+    "duration": "5 分钟",
+    "totalItems": 6,
+    "frequency": "每日两次",
+    "scheduledTime": "11:00,16:00",
+    "responsibleRole": "当班员工 / 主管",
+    "color": "#10B981",
+    "items": [
+      {
+        "id": 1,
+        "category": "卫生规范",
+        "text": "员工全程佩戴口罩（制作区）",
+        "required": true,
+        "aiVerifiable": true,
+        "aiType": "mask_detection"
+      },
+      {
+        "id": 2,
+        "category": "卫生规范",
+        "text": "操作台无明显污渍、积水",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 3,
+        "category": "卫生规范",
+        "text": "地面清洁，无洒漏饮料",
+        "required": false,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 4,
+        "category": "顾客体验",
+        "text": "取餐台饮品有序摆放",
+        "required": false,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 5,
+        "category": "顾客体验",
+        "text": "用餐区桌面及时清理",
+        "required": false,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 6,
+        "category": "合规着装",
+        "text": "员工着工服、佩戴工牌",
+        "required": true,
+        "aiVerifiable": true,
+        "aiType": "uniform_check"
+      }
+    ],
+    "enabled": true
+  },
+  {
+    "id": "SOP-004",
+    "name": "每周深度清洁",
+    "type": "weekly",
+    "typeName": "周度 SOP",
+    "icon": "calendar",
+    "description": "每周一闭店后进行的深度清洁与设备维护",
+    "duration": "60 分钟",
+    "totalItems": 8,
+    "frequency": "每周一次（周一）",
+    "scheduledTime": "每周一 22:00",
+    "responsibleRole": "全体员工",
+    "color": "#8B5CF6",
+    "items": [
+      {
+        "id": 1,
+        "category": "深度清洁",
+        "text": "冰箱内部全面清洁除霜",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 2,
+        "category": "深度清洁",
+        "text": "制冰机内部消毒清洗",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 3,
+        "category": "深度清洁",
+        "text": "空调滤网清洗",
+        "required": false,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 4,
+        "category": "设备维护",
+        "text": "封口机、奶昔机保养润滑",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 5,
+        "category": "设备维护",
+        "text": "检查所有水管、电路安全",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 6,
+        "category": "安全检查",
+        "text": "消防器材有效期检查",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 7,
+        "category": "卫生规范",
+        "text": "天花板、灯具、墙角除尘",
+        "required": false,
+        "aiVerifiable": false,
+        "aiType": null
+      },
+      {
+        "id": 8,
+        "category": "库存管理",
+        "text": "全面盘点，库存系统更新",
+        "required": true,
+        "aiVerifiable": false,
+        "aiType": null
+      }
+    ],
+    "enabled": true
+  }
+]

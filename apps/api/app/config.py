@@ -44,6 +44,10 @@ class Settings:
     vision_timeout_seconds: float = 90.0
     vision_max_attempts: int = 5
     feishu_webhook_url: str = ""
+    feishu_signing_secret: str = ""
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_chat_id: str = ""
     public_base_url: str = "http://127.0.0.1:5173"
 
     @classmethod
@@ -70,6 +74,10 @@ class Settings:
             vision_timeout_seconds=float(os.getenv("VOLC_ENGINE_TIMEOUT_SECONDS", "90")),
             vision_max_attempts=int(os.getenv("VOLC_ENGINE_MAX_ATTEMPTS", "5")),
             feishu_webhook_url=os.getenv("FEISHU_WEBHOOK_URL", ""),
+            feishu_signing_secret=os.getenv("FEISHU_SIGNING_SECRET", ""),
+            feishu_app_id=os.getenv("FEISHU_APP_ID", ""),
+            feishu_app_secret=os.getenv("FEISHU_APP_SECRET", ""),
+            feishu_chat_id=os.getenv("FEISHU_CHAT_ID", ""),
             public_base_url=os.getenv("STORE_VISION_PUBLIC_BASE_URL", "http://127.0.0.1:5173"),
         )
 

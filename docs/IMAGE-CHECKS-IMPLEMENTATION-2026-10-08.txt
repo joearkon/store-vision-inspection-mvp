@@ -1,0 +1,13 @@
+通用图片核验首版
+入口：本地规则配置顶部的图片核验。参考用户最新原型的规则配置、证据、结果和草稿流程；未引入原型随机结果。
+已实现：不可变规则记录、最多20检查项、文字标准、必检开关、拍摄要求、可选标准图；指定门店任务、按项拍照上传；JPEG/PNG解码校验、10MB限制、尺寸限制、缩放；真实Doubao结构化调用；通过/不通过/人工核查/补图；逐项证据和usage；SQLite持久化；任务标准快照；失败保留完成项；并发原子领取和完成任务幂等。
+自动化：test_image_checks.py端到端测试使用受控模型替身，仅在测试中。ImageChecks.test.jsx验证线上静态版本关闭真实上传分析。全量verify执行结果另记录。
+逻辑边界：不从图片推断时序；不因缺图通过；无必检项时转人工核查；不发送飞书或执行处罚。门店字段当前手填，不是新增多租户鉴权。
+视觉：继承现有surface、颜色和字体；图片核验表单而非原型详情抽屉的完整移植。浏览器CUA初始化失败，1280x720验收未通过。
+未验收：新品素材缺失，真实模型没有运行样本；不宣称准确率。尚未发布Cloudflare。
+后续：规则编辑/版本管理、任务下发权限、通知与整改复审、批量任务、分析取消和崩溃恢复、完整抽屉视觉均待后续。当前图片分析为同步请求，服务中断后analyzing需运维恢复，尚非生产调度。
+
+验收补充：scripts/verify.ps1项目虚拟环境全量执行退出码0；132后端测试通过，前端测试与Vite构建通过。本地8797规则接口返回空列表（真实空状态），5173开发服务已启动。
+
+2026-10-08 real AI integration acceptance:
+LibTV canvas: 5fbd107c87bb475b8762a0a102140af8. Three synthetic menu images generated through LibTV CLI and visually inspected. Normal menu -> pass; strawberry price 28 instead of 18 -> fail; missing peach product -> fail; absent evidence -> need_photo. All four expected conclusions matched; this is a small synthetic test, not real-store accuracy validation. Full responses, task IDs and usage saved at workspace output/libtv-image-tests/real-ai-test-report.json. Real local API upload/create/attach/analyze/persistence workflow exercised. Browser click/visual acceptance remains incomplete: CUA trusted Node process crashes during initialization, repeated retry failed; native Node runtime also failed Windows sandbox setup. No deployment performed in this test.

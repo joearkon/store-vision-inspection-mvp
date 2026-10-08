@@ -1,0 +1,11 @@
+{
+  "name": "store-vision-inspection-static",
+  "pages_build_output_dir": "./dist",
+  "d1_databases": [
+    {
+      "binding": "DEMO_DB",
+      "database_name": "store-vision-inspection-demo",
+      "database_id": "716f92f6-a0da-4653-b7d2-897476331bbc"
+    }
+  ]
+}

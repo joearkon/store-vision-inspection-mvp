@@ -40,7 +40,7 @@ describe("api client", () => {
 
   it("builds original event video URLs against the local backend", () => {
     expect(api.eventVideoUrl("EVT-1")).toBe(
-      "http://127.0.0.1:8797/api/media/events/EVT-1/video"
+      "http://127.0.0.1:8797/api/media/events/EVT-1/video?playback=h264-v1"
     );
   });
 });

@@ -5,6 +5,7 @@ import time
 
 from apps.api.app.analyzer import AnalysisRunner
 from apps.api.app.config import Settings
+from apps.api.app.scene import run_scene
 from apps.api.app.db import Database
 
 
@@ -34,7 +35,18 @@ def main() -> None:
     database = Database(settings.database_path)
     database.initialize()
     runner = AnalysisRunner(settings, database)
+    from apps.api.app.sop import generate
     while True:
+        generate(database)
+        with database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            scene=connection.execute("SELECT video_id FROM scene_jobs WHERE status='queued' ORDER BY created_at LIMIT 1").fetchone()
+            if scene: connection.execute("UPDATE scene_jobs SET status='running' WHERE video_id=?",(scene['video_id'],))
+        if scene:
+            try: run_scene(settings,database,scene['video_id'],runner.provider)
+            except Exception as exc: print(f"scene failed: {str(exc)[:300]}",flush=True)
+            if args.once: return
+            continue
         run_id = claim_next(database)
         if run_id:
             try:

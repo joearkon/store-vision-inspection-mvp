@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import datetime, time, timedelta
@@ -29,11 +30,54 @@ class ApiTests(unittest.TestCase):
         self.client_context.__exit__(None, None, None)
         self.temp.cleanup()
 
+    def test_cancel_analysis_preserves_usage_and_blocks_resume(self):
+        video = self.client.post("/api/videos?filename=cancel.mp4&camera_id=CAM-STORAGE-01", content=b"video", headers={"content-type":"video/mp4"}).json()
+        run = self.client.post("/api/analysis-runs", json={"video_id":video['id']}).json()
+        db = self.client.app.state.database
+        for status in ['queued','claimed','running','awaiting_approval']:
+            db.execute("UPDATE analysis_runs SET status=?,prompt_tokens=123,progress=.77 WHERE id=?",(status,run['id']))
+            result = self.client.post(f"/api/analysis-runs/{run['id']}/cancel")
+            self.assertEqual(result.status_code,200)
+            self.assertEqual(result.json()['status'],'cancelled')
+            self.assertEqual(result.json()['prompt_tokens'],123)
+            self.assertEqual(self.client.post(f"/api/analysis-runs/{run['id']}/approve-fallback").status_code,409)
+        self.assertEqual(self.client.post(f"/api/analysis-runs/{run['id']}/cancel").status_code,200)
+        for status in ['completed','failed']:
+            db.execute("UPDATE analysis_runs SET status=? WHERE id=?",(status,run['id']))
+            self.assertEqual(self.client.post(f"/api/analysis-runs/{run['id']}/cancel").status_code,409)
+        self.assertEqual(self.client.post('/api/analysis-runs/absent/cancel').status_code,404)
+
+    def test_cancelled_runner_cannot_call_provider(self):
+        from apps.api.app.analyzer import CancellableProvider, AnalysisCancelled
+        from unittest.mock import Mock
+        provider = Mock()
+        def cancelled():
+            raise AnalysisCancelled()
+        wrapped = CancellableProvider(provider,cancelled)
+        with self.assertRaises(AnalysisCancelled):
+            wrapped.inspect_fridge_door('frame','camera')
+        provider.inspect_fridge_door.assert_not_called()
+
+    def test_explicit_rule_skips_scene_but_preserves_enabled_rule_and_roi_checks(self):
+        video = self.client.post("/api/videos?filename=selected.mp4&explicit_rules=true",content=b"video",headers={"content-type":"video/mp4"}).json()
+        db=self.client.app.state.database
+        self.assertIsNone(db.fetch_one("SELECT * FROM scene_jobs WHERE video_id=?",(video['id'],)))
+        self.assertEqual(db.fetch_one("SELECT area_type FROM camera_sources WHERE id=?",(video['camera_id'],))['area_type'],'unknown')
+        payload={'video_id':video['id'],'rule_code':'A1','explicit_rule':True,'scene_request':True}
+        first=self.client.post('/api/analysis-runs',json=payload)
+        self.assertEqual(first.status_code,201)
+        self.assertEqual(first.json()['rule_code'],'A1')
+        self.assertEqual(self.client.post('/api/analysis-runs',json=payload).json()['id'],first.json()['id'])
+        self.assertEqual(self.client.post('/api/analysis-runs',json={**payload,'rule_code':'G2'}).status_code,400)
+        db.execute("UPDATE store_rule_settings SET enabled=0 WHERE store_id='STORE-JTU' AND rule_code='A2'")
+        self.assertEqual(self.client.post('/api/analysis-runs',json={**payload,'rule_code':'A2'}).status_code,422)
+
     def test_health_and_bootstrap(self) -> None:
         self.assertEqual(self.client.get("/health").json(), {"status": "ok"})
         payload = self.client.get("/api/bootstrap").json()
         self.assertEqual(payload["store"]["name"], "MOMOYO JTU")
         self.assertEqual(len(payload["cameras"]), 5)
+        self.assertTrue(all(camera["preview_image_url"] is None for camera in payload["cameras"]))
         self.assertEqual(
             {camera["name"] for camera in payload["cameras"]},
             {"前台-01", "后厨-01", "仓储-01", "取餐-01", "用餐区-01"},
@@ -181,9 +225,23 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(run.json()["status"], "queued")
         self.assertEqual(run.json()["analysis_mode"], "two_stage")
         self.assertEqual(run.json()["rule_code"], "E1")
+        self.assertEqual(json.loads(run.json()["rule_config_snapshot_json"])["duration_threshold_seconds"], 30)
+        self.assertIn("inspect_open_segments", json.loads(run.json()["prompt_snapshot_json"])["template_method_names"])
         zero_event_detail = self.client.get(f"/api/analysis-runs/{run.json()['id']}").json()
         self.assertEqual(zero_event_detail["event_count"], 0)
         self.assertEqual(zero_event_detail["events"], [])
+        self.assertEqual(zero_event_detail["decisions"], [])  # queued is not yet a zero-event conclusion
+        self.assertEqual(zero_event_detail["cost_status"], "usage_unrecorded")
+        self.client.app.state.database.execute(
+            """UPDATE analysis_runs SET request_count=1, prompt_tokens=1000,
+               completion_tokens=100, model_id='doubao-seed-2-1-lite-260915'
+               WHERE id=?""", (run.json()["id"],),
+        )
+        priced_detail = self.client.get(f"/api/analysis-runs/{run.json()['id']}").json()
+        self.assertEqual(priced_detail["estimated_cost_yuan"], 0.00107)
+        priced_list = next(item for item in self.client.get("/api/analysis-runs").json()
+                           if item["id"] == run.json()["id"])
+        self.assertEqual(priced_list["estimated_cost_yuan"], 0.00107)
 
         ppe_run = self.client.post(
             "/api/analysis-runs",
@@ -207,7 +265,7 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(front_run.status_code, 201)
         self.assertEqual(front_run.json()["rule_code"], "A1")
-        self.assertEqual(front_run.json()["notifications_enabled"], 0)
+        self.assertEqual(front_run.json()["notifications_enabled"], 1)
         back_video = self.client.post(
             "/api/videos?filename=back.mp4&camera_id=CAM-BACK-01",
             content=b"back", headers={"content-type": "video/mp4"},
@@ -217,7 +275,7 @@ class ApiTests(unittest.TestCase):
         })
         self.assertEqual(back_run.status_code, 201)
         self.assertEqual(back_run.json()["rule_code"], "B1")
-        self.assertEqual(back_run.json()["notifications_enabled"], 0)
+        self.assertEqual(back_run.json()["notifications_enabled"], 1)
         for rule_code, video_id in (("A2", front_video["id"]), ("C1", back_video["id"]),
                                     ("A3", back_video["id"]), ("A4", front_video["id"])):
             trial = self.client.post("/api/analysis-runs", json={
@@ -225,7 +283,7 @@ class ApiTests(unittest.TestCase):
             })
             self.assertEqual(trial.status_code, 201)
             self.assertEqual(trial.json()["rule_code"], rule_code)
-            self.assertEqual(trial.json()["notifications_enabled"], 0)
+            self.assertEqual(trial.json()["notifications_enabled"], 1)
         dining_video = self.client.post(
             "/api/videos?filename=dining.mp4&camera_id=CAM-DINING-01",
             content=b"dining", headers={"content-type": "video/mp4"},

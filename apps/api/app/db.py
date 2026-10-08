@@ -9,6 +9,25 @@ from typing import Any, Iterator
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS scene_jobs (
+ video_id TEXT PRIMARY KEY REFERENCES video_assets(id), status TEXT NOT NULL,
+ result_json TEXT, error_message TEXT, created_at TEXT NOT NULL, completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS store_rule_settings (
+ store_id TEXT NOT NULL REFERENCES stores(id), rule_code TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+ PRIMARY KEY(store_id,rule_code)
+);
+
+CREATE TABLE IF NOT EXISTS cleaning_checks (
+ run_id TEXT PRIMARY KEY REFERENCES analysis_runs(id), verdict TEXT NOT NULL,
+ explanation TEXT NOT NULL, evidence_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS analysis_usage (
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES analysis_runs(id),
+ phase TEXT NOT NULL, model_id TEXT, prompt_tokens INTEGER NOT NULL,
+ completion_tokens INTEGER NOT NULL, created_at TEXT NOT NULL
+);
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS organizations (
@@ -90,7 +109,10 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
   prompt_tokens INTEGER NOT NULL DEFAULT 0,
   completion_tokens INTEGER NOT NULL DEFAULT 0,
   request_count INTEGER NOT NULL DEFAULT 0,
+  model_id TEXT,
   screening_result_json TEXT,
+  rule_config_snapshot_json TEXT,
+  prompt_snapshot_json TEXT,
   started_at TEXT,
   completed_at TEXT,
   created_at TEXT NOT NULL
@@ -114,6 +136,27 @@ CREATE TABLE IF NOT EXISTS system_settings (
 
 CREATE INDEX IF NOT EXISTS idx_analysis_runs_status
 ON analysis_runs(status, created_at);
+
+CREATE TABLE IF NOT EXISTS analysis_decisions (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES analysis_runs(id),
+  scope TEXT NOT NULL CHECK(scope IN ('task', 'candidate')),
+  candidate_index INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  start_offset REAL,
+  end_offset REAL,
+  outcome TEXT NOT NULL,
+  reason_code TEXT NOT NULL,
+  evidence_finding_ids_json TEXT NOT NULL DEFAULT '[]',
+  event_id TEXT REFERENCES inspection_events(id),
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(run_id, scope, candidate_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analysis_decisions_run
+ON analysis_decisions(run_id, scope, candidate_index);
 
 CREATE TABLE IF NOT EXISTS frame_findings (
   id TEXT PRIMARY KEY,
@@ -224,11 +267,18 @@ class Database:
             connection.executescript(SCHEMA)
             self._migrate(connection)
         self.seed()
+        from .sop import initialize as initialize_sop
+        initialize_sop(self)
+        for code in ('E1','A1','A2','C1','A3','A4','B1','G2','M1'):
+            self.execute("INSERT OR IGNORE INTO store_rule_settings VALUES ('STORE-JTU',?,1)",(code,))
 
     @staticmethod
     def _migrate(connection: sqlite3.Connection) -> None:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(analysis_runs)")}
         additions = {
+            "active_seconds": "REAL",
+            "roi_snapshot_json": "TEXT",
+            "scene_key": "TEXT",
             "analysis_mode": "TEXT NOT NULL DEFAULT 'two_stage'",
             "rule_code": "TEXT NOT NULL DEFAULT 'E1'",
             "fallback_approved": "INTEGER NOT NULL DEFAULT 0",
@@ -237,11 +287,15 @@ class Database:
             "prompt_tokens": "INTEGER NOT NULL DEFAULT 0",
             "completion_tokens": "INTEGER NOT NULL DEFAULT 0",
             "request_count": "INTEGER NOT NULL DEFAULT 0",
+            "model_id": "TEXT",
             "screening_result_json": "TEXT",
+            "rule_config_snapshot_json": "TEXT",
+            "prompt_snapshot_json": "TEXT",
         }
         for name, definition in additions.items():
             if name not in columns:
                 connection.execute(f"ALTER TABLE analysis_runs ADD COLUMN {name} {definition}")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS analysis_scene_key ON analysis_runs(scene_key) WHERE scene_key IS NOT NULL")
         event_columns = {row["name"] for row in connection.execute("PRAGMA table_info(inspection_events)")}
         if "assignee_id" not in event_columns:
             connection.execute("ALTER TABLE inspection_events ADD COLUMN assignee_id TEXT REFERENCES users(id)")

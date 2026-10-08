@@ -1,5 +1,7 @@
 # 门店 AI 视频巡检 MVP
 
+判定链业务字典与待裁定口径：[视频分析判定链：字段级业务字典](docs/DECISION-TRACE-BUSINESS-DICTIONARY-2026-10-04.md)。
+
 独立于加盟商运营系统的视频巡店分析项目。第一阶段验证真实视频上传、抽帧、豆包 Vision 判定、多帧事件聚合、事件看板和飞书告警闭环。
 
 ## 已确认边界
@@ -48,6 +50,8 @@ tests/             规则、接口、流程和视觉验收
 - [双模式分析设计与真实 A/B](./docs/DUAL-MODE-ANALYSIS-DESIGN.md)
 - [事件证据交互复核](./docs/EVENT-EVIDENCE-REVIEW.md)
 - [A1 口罩/手套实验规则交付审计](./docs/A1-PPE-RULE-AUDIT-2026-09-27.md)
+- [语义—策略—行动三层业务定义与现状差距](./docs/THREE-LAYER-DECISION-MODEL-2026-10-04.md)
+- [飞书 P0/P1/P2 卡片联调与卡内裁决方案](./docs/FEISHU-SEVERITY-CARD-AND-INTERACTION-AUDIT-2026-10-04.md)
 
 ## 本地运行
 
@@ -71,3 +75,22 @@ npm run dev
 ```powershell
 ./scripts/verify.ps1
 ```
+
+## Cloudflare Pages 演示环境
+
+当前版本：<https://store-vision-inspection-static.pages.dev/#/login>。先打开独立的左右分栏登录页，再选择免密码演示账号进入后台；后台左侧用户区可切换账号。管理员可处理事件、管理演示摄像头/规则/账号；巡检员可处理事件和启停视频源；查看者只读。普通操作通过 Pages Functions 写入 D1，刷新后仍保留。视频上传、抽帧/AI 分析、实时摄像头及飞书发送仍不开放。
+
+账号切换**不是身份认证**：公开链接访客可自行选择管理员，只适用于合成数据产品演示，不得放真实门店数据。Cloudflare Free 额度用尽时写入会失败，不应自动开通付费服务。
+
+更新静态快照时，在本地已有数据且通过验证后执行：
+
+```powershell
+cd apps/web
+npm run build:showcase
+cd ../..
+python -m scripts.export_static_showcase
+cd apps/web
+wrangler pages deploy dist --project-name store-vision-inspection-static --branch main
+```
+
+初次部署还须在 Cloudflare 建立 `store-vision-inspection-demo` D1 数据库、在 `apps/web/wrangler.jsonc` 配置 `DEMO_DB` 绑定，并执行 `apps/web/migrations/0001_demo.sql`。导出器只发布白名单 JSON 与事件证据帧，不发布 MP4、SQLite、模型原始响应或密钥。详见[部署与验收记录](./docs/CLOUDFLARE-STATIC-SHOWCASE-AUDIT-2026-10-04.md)。
