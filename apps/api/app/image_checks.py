@@ -144,7 +144,7 @@ def router(settings):
     def create(payload:dict):
         rule=get(payload.get('rule_id',''),'rule');store=str(payload.get('store','')).strip()
         if not store:raise HTTPException(422,'请选择门店')
-        body={'id':'IMG-TASK-'+uuid.uuid4().hex[:12],'store':store,'rule':rule,'photos':{},'status':'pending','results':{},'sample_name':str(payload.get('sample_name',''))[:200],'ground_truth':None}
+        body={'id':'IMG-TASK-'+uuid.uuid4().hex[:12],'store':store,'rule':rule,'photos':{},'created_at':datetime.now(timezone.utc).isoformat(),'status':'pending','results':{},'sample_name':str(payload.get('sample_name',''))[:200],'ground_truth':None}
         put(body['id'],'task',body);return body
     @api.put('/tasks/{id}/photos')
     def attach(id:str,payload:dict):
@@ -179,6 +179,7 @@ def router(settings):
             if latest['status']=='analyzing':raise HTTPException(409,'分析正在进行')
             task=latest
             task['status']='analyzing'
+            task['started_at']=datetime.now(timezone.utc).isoformat()
             if c.execute('UPDATE records SET body=? WHERE id=? AND body=?',(json.dumps(task,ensure_ascii=False),id,original)).rowcount!=1:raise HTTPException(409,'任务状态已变化')
         results=task.get('results',{}).copy();usage=task.get('usage',[]).copy()
         try:
@@ -200,6 +201,7 @@ def router(settings):
                 if result.get('status') not in ['pass','fail','review','need_photo'] or not isinstance(result.get('reason'),str):raise ValueError('模型响应格式异常')
                 results[item['id']]={'status':result['status'],'reason':result['reason'],'photo_id':pid};usage.append(raw.get('usage',{}))
                 task.update(results=results,usage=usage);put(id,'task',task)
+            task['active_seconds']=(datetime.now(timezone.utc)-datetime.fromisoformat(task['started_at'])).total_seconds()
             task.pop('error',None)
             task.update(status='completed',results=results,conclusion=conclusion(results,task['rule']['items']),usage=usage,model=settings.vision_model,completed_at=datetime.now(timezone.utc).isoformat())
         except Exception:

@@ -15,7 +15,7 @@ def export():
    if it.get('reference_id'):photo_ids.add(it['reference_id'])
  safe=[]
  for t in tasks:
-  row={k:t[k] for k in ['id','store','rule','photos','status','results','conclusion','ground_truth','sample_name','usage'] if k in t};safe.append(row)
+  row={k:t[k] for k in ['id','store','rule','photos','status','results','conclusion','ground_truth','sample_name','usage','created_at','started_at','completed_at','active_seconds'] if k in t};safe.append(row)
   photo_ids.update(t['photos'].values())
   for it in t['rule']['items']:
    if it.get('reference_id'):photo_ids.add(it['reference_id'])

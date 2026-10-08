@@ -1,3 +1,6 @@
+import {configCall} from './RuleSamples';
+import {mergeAnalysisTasks,taskOutcome,analysisRuleOptions,analysisTypeCounts} from './imageTaskRun';
+import {ImageUploadPage, ImageTaskList, ImageTaskDetail} from './ImageUploadPage';
 import AgentPage from "./AgentPage";
 import PrototypeRules from './PrototypeRules';
 import {RunActions} from "./RunActions";
@@ -27,7 +30,7 @@ const navItems = [
   ["sopTemplates", "SOP 模板配置", "sop"],
   ["stores", "门店总览", "home"],
   ["dashboard", "监控大盘", "dashboard"],
-  ["upload", "视频上传", "upload"],
+  ["upload", "素材上传", "upload"],
   ["runs", "分析任务", "video"],
   ["cameras", "摄像头管理", "camera"],
   ["rectification", "整改跟踪", "rectification"],
@@ -109,7 +112,8 @@ function App() {
           {route.page === "dashboard" && <Dashboard navigate={route.navigate} />}
           {route.page === "cameraDetail" && <CameraDetail id={route.id} navigate={route.navigate} />}
           {route.page === "stores" && <StoreOverviewPage bootstrap={bootstrap} navigate={route.navigate} />}
-          {route.page === "upload" && (isShowcaseMode ? <ShowcaseUnavailable title="视频上传与分析" /> : <AutoUploadPage bootstrap={bootstrap} navigate={route.navigate} initialCameraId={route.id} />)}
+          {["upload","imageUpload"].includes(route.page) && <MaterialUploadPage bootstrap={bootstrap} navigate={route.navigate} initialCameraId={route.id} initialType={route.page==="imageUpload"?"image":"video"}/>}
+          {route.page === "imageTask" && <ImageTaskDetail id={route.id} navigate={route.navigate} disabled={isShowcaseMode} />}
           {route.page === "runs" && <RunsPage navigate={route.navigate} />}
           {route.page === "run" && <RunDetail id={route.id} navigate={route.navigate} />}
           {route.page === "event" && <EventDetail id={route.id} navigate={route.navigate} canEdit={canEdit} />}
@@ -139,7 +143,7 @@ export function Sidebar({ route, store, demoUser }) {
         <span className="sidebar-nav-label">{group}</span>
         {keys.filter((key) => key !== "accounts" || isShowcaseMode).map((key) => {
           const [, label, icon] = navItems.find((item) => item[0] === key);
-          return <button key={key} className={route.page === key || (route.page === "sopTask" && key === "sop") || (route.page === "cameraDetail" && key === "dashboard") || (route.page === "event" && key === "rectification") || (route.page === "run" && key === "runs") ? "active" : ""} onClick={() => route.navigate(key)}><Icon name={icon} /><span>{label}</span></button>;
+          return <button key={key} className={route.page === key || (route.page === "imageUpload" && key === "upload") || (route.page === "sopTask" && key === "sop") || (route.page === "cameraDetail" && key === "dashboard") || (route.page === "event" && key === "rectification") || (["run","imageTask"].includes(route.page) && key === "runs") ? "active" : ""} onClick={() => route.navigate(key)}><Icon name={icon} /><span>{label}</span></button>;
         })}
       </div>)}</nav>
       <div className="sidebar-user">
@@ -160,8 +164,10 @@ function TopHeader({ route, store, serviceError, demoUser }) {
     dashboard: ["门店视觉巡检 · 监控大盘", "查看演示视频源与实际分析事件"],
     cameraDetail: ["MOMOYO JTU · 摄像头详情", "演示静帧与该来源的真实分析记录"],
     stores: ["门店视觉巡检 · 门店总览", "查看已接入门店的巡检结果"],
-    upload: ["视频上传分析", isShowcaseMode ? "线上演示暂不提供上传和分析" : "上传门店视频并运行真实 AI 巡检"],
-    runs: ["分析任务", "查看抽帧、视觉分析与事件聚合进度"],
+    upload: ["素材上传", "上传视频或图片，进行 AI 巡检核验"],
+    imageUpload: ["素材上传", "上传视频或图片，进行 AI 巡检核验"],
+    imageTask: ["图片识别详情", "查看逐项核验结果与图片证据"],
+    runs: ["分析任务", "查看视频分析与图片识别任务"],
     run: ["分析结果", "查看任务结论、耗时和模型消耗"],
     event: ["事件详情", "查看异常证据、状态与整改记录"],
     cameras: ["MOMOYO JTU · 摄像头管理", "管理门店所有监控摄像头"],
@@ -332,7 +338,13 @@ function Confidence({ value }) { return <span className="confidence"><Icon name=
 
 function StatusBadge({ value }) { return <span className={`status-badge status-${value}`}>{statusLabel(value)}</span>; }
 
-function RunsPage({ navigate }) {
+export function MaterialUploadPage({bootstrap,navigate,initialCameraId,initialType="video"}) {
+ const [type,setType]=useState(initialType);
+ return <><div className="analysis-type-tabs" role="group" aria-label="上传类型">{[["video","视频上传","video"],["image","图片上传","image"]].map(([value,label,icon])=><button type="button" className={`button ${type===value?"primary":"secondary"}`} key={value} aria-pressed={type===value} onClick={()=>setType(value)}><Icon name={icon}/>{label}</button>)}</div>{type==="image"?<ImageUploadPage bootstrap={bootstrap} navigate={navigate} disabled={isShowcaseMode}/>:isShowcaseMode?<ShowcaseUnavailable title="视频上传与分析"/>:<AutoUploadPage bootstrap={bootstrap} navigate={navigate} initialCameraId={initialCameraId}/>}</>;
+}
+function RunsPage({navigate}) { return <VideoRunsPage navigate={navigate}/>; }
+function VideoRunsPage({ navigate }) {
+  const [type,setType]=useState("all");
   const [runs, setRuns] = useState(null);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("all");
@@ -341,9 +353,9 @@ function RunsPage({ navigate }) {
   const [period, setPeriod] = useState("all");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
-  const load = () => api.runs().then((items) => { setRuns(items); setError(""); }).catch((err) => setError(err.message));
+  const load = () => Promise.all([api.runs(),configCall('/tasks'),configCall('/configs')]).then(([videos,images,configs]) => { setRuns(mergeAnalysisTasks(videos,images,configs)); setError(""); }).catch((err) => setError(err.message));
   useEffect(() => { load(); if (isShowcaseMode) return undefined; const timer = setInterval(load, 3000); return () => clearInterval(timer); }, []);
-  const filtered = useMemo(() => filterAnalysisRuns(runs || [], { status, rule, outcome, period, query }), [runs, status, rule, outcome, period, query]);
+  const filtered = useMemo(() => filterAnalysisRuns((runs||[]).filter(t=>type==='all'||t.media_type===type), { status, rule, outcome, period, query }), [runs, type, status, rule, outcome, period, query]);
   const pageSize = 8;
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, pageCount);
@@ -351,25 +363,28 @@ function RunsPage({ navigate }) {
   const change = (setter, value) => { setter(value); setPage(1); };
   if (error) return <ErrorCard message={error} retry={load} />;
   if (!runs) return <LoadingCard />;
+  const scopedRuns=runs.filter(t=>type==='all'||t.media_type===type);
   const tabs = [
-    ["all", "全部", runs.length],
-    ["completed", "已完成", runs.filter((run) => run.status === "completed").length],
-    ["active", "进行中", runs.filter((run) => ["queued", "running"].includes(run.status)).length],
-    ["awaiting_approval", "待确认回退", runs.filter((run) => run.status === "awaiting_approval").length],
-    ["failed", "分析失败", runs.filter((run) => run.status === "failed").length],
+    ["all", "全部", scopedRuns.length],
+    ["completed", "已完成", scopedRuns.filter((run) => run.status === "completed").length],
+    ["active", "进行中", scopedRuns.filter((run) => ["queued", "running"].includes(run.status)).length],
+    ["awaiting_approval", "待确认回退", scopedRuns.filter((run) => run.status === "awaiting_approval").length],
+    ["failed", "分析失败", scopedRuns.filter((run) => run.status === "failed").length],
   ];
-  const ruleOptions = ["all", ...new Set(runs.map((run) => run.rule_code || "E1"))];
-  return <section className="surface list-page runs-page">
-    <div className="page-section-title"><div><h2>视频分析任务</h2><p>点击任务查看结论、证据、耗时与模型消耗；无事件任务也保留分析结果</p></div><button className="button primary" disabled={isShowcaseMode} title={isShowcaseMode ? "静态展示版不支持上传" : ""} onClick={() => navigate("upload")}><Icon name="upload" />上传视频</button></div>
+  const ruleOptions=analysisRuleOptions(runs);
+  const typeCounts=analysisTypeCounts(runs);
+  return <section className="list-page runs-page prototype-analysis-page">
+    <div className="page-section-title"><div><h2>分析任务</h2><p>点击任务查看结论、证据、耗时与模型消耗；无事件任务也保留分析结果</p></div><button className="button primary" disabled={isShowcaseMode} title={isShowcaseMode ? "静态展示版不支持上传" : ""} onClick={() => navigate(type==='image'?"imageUpload":"upload")}><Icon name="upload" />上传素材</button></div>
+    <div className="analysis-type-tabs" role="tablist" aria-label="分析类型">{[["all","全部任务"],["video","视频任务"],["image","图片任务"]].map(([value,label])=><button type="button" role="tab" aria-selected={type===value} key={value} className={type===value?"active":""} onClick={()=>{setType(value);setPage(1);}}>{value!=="all"&&<Icon name={value} size={14}/>} {label}<b>{typeCounts[value]}</b></button>)}</div>
     <div className="filter-tabs" role="tablist" aria-label="任务状态">{tabs.map(([value, label, count]) => <button type="button" role="tab" aria-selected={status === value} className={status === value ? "active" : ""} key={value} onClick={() => change(setStatus, value)}>{label} <b>{count}</b></button>)}</div>
     <div className="rectification-filters runs-filters">
       <div className="runs-rule-filter" role="group" aria-label="检测规则"><span>检测规则</span>{ruleOptions.map((value) => <button type="button" aria-pressed={rule === value} className={rule === value ? "active" : ""} key={value} onClick={() => change(setRule, value)}>{ruleFilterLabel(value)}</button>)}</div>
-      <div><span>分析结论：</span>{[["all", "全部"], ["event", "有事件"], ["zero", "零事件"]].map(([value, label]) => <button type="button" aria-pressed={outcome === value} className={outcome === value ? "active" : ""} key={value} onClick={() => change(setOutcome, value)}>{label}</button>)}</div>
+      <div><span>分析结论：</span>{[["all", "全部"], ["event", "有事件"], ["zero", "零事件"], ["pass", "通过"], ["fail", "不通过"], ["review", "人工核查"], ["need_photo", "待补拍"]].map(([value, label]) => <button type="button" aria-pressed={outcome === value} className={outcome === value ? "active" : ""} key={value} onClick={() => change(setOutcome, value)}>{label}</button>)}</div>
       <div><span>时间范围：</span>{[["today", "今天"], ["week", "近 7 天"], ["month", "近 30 天"], ["all", "全部"]].map(([value, label]) => <button type="button" aria-pressed={period === value} className={period === value ? "active" : ""} key={value} onClick={() => change(setPeriod, value)}>{label}</button>)}</div>
-      <label className="runs-search"><span>搜索：</span><input value={query} onChange={(event) => change(setQuery, event.target.value)} placeholder="任务 ID / 视频名称…" aria-label="搜索分析任务" /></label>
+      <label className="runs-search"><span>搜索：</span><input value={query} onChange={(event) => change(setQuery, event.target.value)} placeholder="任务 ID / 素材名称 / 门店…" aria-label="搜索分析任务" /></label>
     </div>
-    <div className="runs-table"><div className="table-head run-grid"><span>任务 / 视频 / 模型成本估算</span><span>规则 / 模式</span><span>处理进度</span><span>分析结论 / 状态</span><span>耗时 / 调用 / Token</span><span>创建时间</span></div>
-      {visible.length ? visible.map((run) => <button type="button" className="table-row run-grid run-row" key={run.id} onClick={() => navigate("run", run.id)} aria-label={`查看任务 ${run.id} 的分析结果`}><div><strong>{run.id}</strong><span title={run.original_name}>{run.original_name}</span><small className="run-cost">模型成本：{runCostText(run)}</small></div><span>{run.rule_code || "E1"} · {analysisModeLabel(run)}</span><div className="run-progress"><div className="run-progress-track"><i style={{ width: `${Math.max(0, Math.min(100, Math.round((run.progress || 0) * 100)))}%` }} /></div><span>{Math.round((run.progress || 0) * 100)}%</span></div><div className="run-outcome-cell"><span className={`run-outcome ${runOutcome(run).tone}`}>{runOutcome(run).label}</span><StatusBadge value={run.status} /></div><div className="run-usage"><span>{analysisElapsedSeconds(run) == null ? "—" : formatDuration(analysisElapsedSeconds(run))}</span><small>{run.fallback_approved && run.active_seconds == null ? "含历史排队/等待 · " : ""}{run.request_count || 0} 次 / {((run.prompt_tokens || 0) + (run.completion_tokens || 0)).toLocaleString()} Token</small></div><time>{new Date(run.created_at).toLocaleString("zh-CN", { hour12: false })}</time></button>) : <div className="table-empty">{runs.length ? "当前条件下没有分析任务，请调整筛选条件。" : "暂无分析任务。上传视频后，可在此查看包括零事件在内的分析结论。"}</div>}
+    <div className="runs-table"><div className="table-head run-grid"><span>任务 / 素材 / 模型成本估算</span><span>规则 / 类型</span><span>处理进度</span><span>分析结论 / 状态</span><span>数量 / 调用 / 时间</span></div>
+      {visible.length ? visible.map((run) => <button type="button" className="table-row run-grid run-row" key={run.id} onClick={() => navigate(run.media_type==='image'?"imageTask":"run", run.id)} aria-label={`查看任务 ${run.id} 的分析结果`}><div><strong><i className={`task-media-label ${run.media_type}`}>{run.media_type==='image'?'图片':'视频'}</i>{run.id}</strong><span title={run.original_name}>{run.original_name}</span>{run.media_type==='image'?<small className="run-cost">门店：{run.store}</small>:<small className="run-cost">模型成本：{runCostText(run)}</small>}</div><div className="task-rule-cell"><span>{ruleFilterLabel(run.rule_code||"E1")}</span><small>{run.media_type==='image'?'图片核验':analysisModeLabel(run)}</small></div><div className="run-progress"><div className="run-progress-track"><i style={{ width: `${Math.max(0, Math.min(100, Math.round((run.progress || 0) * 100)))}%` }} /></div><span>{Math.round((run.progress || 0) * 100)}%</span></div><div className="run-outcome-cell"><span className={`run-outcome ${taskOutcome(run).tone}`}>{taskOutcome(run).label}</span><StatusBadge value={run.status} /></div><div className="run-usage"><span>{run.media_type==='image'?`${new Set(Object.values(run.photos||{})).size} 张图片`:analysisElapsedSeconds(run)==null?"耗时未记录":formatDuration(analysisElapsedSeconds(run))}</span><small>{run.fallback_approved && run.active_seconds == null ? "含历史排队/等待 · " : ""}{run.request_count || 0} 次 / {((run.prompt_tokens || 0) + (run.completion_tokens || 0)).toLocaleString()} Token</small><time title={run.media_type==='image'&&!run.original_created_at?'创建时间未记录，显示分析完成时间':'创建时间'}>{run.created_at?new Date(run.created_at).toLocaleString("zh-CN", { hour12: false }):"时间未记录"}</time></div></button>) : <div className="table-empty">{runs.length ? "当前条件下没有分析任务，请调整筛选条件。" : "暂无分析任务。上传视频后，可在此查看包括零事件在内的分析结论。"}</div>}
     </div>
     <div className="rectification-pager runs-pager"><span>共 {filtered.length} 条记录 · 第 {currentPage}/{pageCount} 页{runs.length === 100 ? " · 当前仅加载最近 100 条任务" : ""}</span><div><button type="button" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>上一页</button>{Array.from({ length: pageCount }, (_, index) => <button type="button" className={currentPage === index + 1 ? "active" : ""} key={index} onClick={() => setPage(index + 1)}>{index + 1}</button>)}<button type="button" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>下一页</button></div></div>
   </section>;
